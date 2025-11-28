@@ -8,9 +8,10 @@ from fastapi.responses import FileResponse
 from datetime import datetime
 from typing import Optional
 
-from backend.data_feed import get_chart_data as fetch_chart_data
+from backend.data_feed import get_chart_data as fetch_chart_data, get_latest_price
 from backend.strategy import generate_signals_and_trades, generate_signal
 from backend.paper_trade import PaperTrader
+from backend.models.requests import PaperOrderRequest
 from backend.models.responses import (
     HealthResponse,
     ChartDataResponse,
@@ -149,9 +150,12 @@ def get_signal(
 
 @app.post("/paper-order", response_model=OrderResponse)
 def place_paper_order(
-    symbol: str,
-    side: str,
-    quantity: int,
+    # JSON body (priority)
+    body: Optional[PaperOrderRequest] = None,
+    # Query parameters (fallback)
+    symbol: Optional[str] = None,
+    side: Optional[str] = None,
+    quantity: Optional[int] = None,
     price: Optional[float] = None,
     signal_id: Optional[str] = None,
     order_time: Optional[str] = None,
@@ -161,12 +165,46 @@ def place_paper_order(
     Place a paper trading order
     
     Per API_SPEC.md specification
+    Now supports both JSON body and query parameters:
+    - Priority 1: JSON body (PaperOrderRequest)
+    - Priority 2: Query parameters (backward compatible)
+    
+    Automatically fetches market price when price not specified.
     """
+    # Priority 1: Use JSON body if provided
+    if body is not None:
+        symbol = body.symbol
+        side = body.side
+        quantity = body.quantity
+        price = body.price if body.price is not None else price
+        signal_id = body.signal_id if body.signal_id is not None else signal_id
+        order_time = body.order_time if body.order_time is not None else order_time
+        mode = body.mode
+    # Priority 2: Use query parameters
+    elif symbol is None or side is None or quantity is None:
+        raise HTTPException(
+            status_code=422,
+            detail="Either provide JSON body or symbol, side, and quantity as query parameters"
+        )
+    
+    # Validate inputs
     if side not in ["BUY", "SELL"]:
         raise HTTPException(status_code=400, detail="side must be BUY or SELL")
     
     if quantity <= 0:
         raise HTTPException(status_code=400, detail="quantity must be positive")
+    
+    # If price not provided, fetch current market price
+    if price is None:
+        try:
+            price = get_latest_price(symbol)
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to get market price for {symbol}: {e}"
+            )
     
     # Execute order via paper trader
     result = trader.execute_order(
@@ -185,12 +223,20 @@ def place_paper_order(
 @app.get("/positions", response_model=PositionsResponse)
 def get_positions():
     """
-    Get current positions
+    Get current positions with real-time pricing
     
     Per API_SPEC.md specification
+    Now calculates unrealized P&L using current market prices
     """
-    positions = trader.get_positions()
-    total_unrealized = sum(p.get("unrealized_pnl", 0.0) for p in positions if p.get("unrealized_pnl"))
+    # Get positions with current prices and unrealized P&L
+    positions = trader.get_positions(price_lookup_fn=get_latest_price)
+    
+    # Calculate total unrealized P&L
+    total_unrealized = sum(
+        p.get("unrealized_pnl", 0.0) 
+        for p in positions 
+        if p.get("unrealized_pnl") is not None
+    )
     
     return {
         "positions": positions,

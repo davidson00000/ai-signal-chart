@@ -3,3 +3,5 @@ uvicorn
 ccxt
 yfinance
 pydantic
+streamlit
+requests

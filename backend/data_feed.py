@@ -207,3 +207,44 @@ def get_chart_data(
         return fetch_crypto_candles(symbol, timeframe, limit)
     else:
         return fetch_stock_candles(symbol, timeframe, limit)
+
+
+def get_latest_price(symbol: str, timeframe: str = "1m") -> float:
+    """
+    Get the latest market price for a symbol
+    
+    This function fetches the most recent candle and returns its close price.
+    Used by PaperTrader to execute orders at current market prices.
+    
+    Args:
+        symbol: Symbol string (crypto or stock)
+        timeframe: Timeframe to use (default: "1m" for most recent data)
+        
+    Returns:
+        Latest close price as float
+        
+    Raises:
+        HTTPException: If unable to fetch price data
+    """
+    try:
+        # Fetch just a few recent candles (enough to get latest)
+        candles = get_chart_data(symbol, timeframe=timeframe, limit=5)
+        
+        if not candles:
+            raise HTTPException(
+                status_code=400,
+                detail=f"No price data available for symbol: {symbol}"
+            )
+        
+        # Return the close price of the most recent candle
+        latest_close = candles[-1]["close"]
+        return float(latest_close)
+        
+    except HTTPException:
+        # Re-raise HTTP exceptions
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch latest price for {symbol}: {e}"
+        )

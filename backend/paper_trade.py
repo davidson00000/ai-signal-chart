@@ -153,23 +153,43 @@ class PaperTrader:
             "pnl": pnl if side == "SELL" else 0.0
         }
     
-    def get_positions(self) -> List[Dict[str, Any]]:
+    
+    def get_positions(self, price_lookup_fn=None) -> List[Dict[str, Any]]:
         """
-        Get current positions
+        Get current positions with optional real-time pricing
+        
+        Args:
+            price_lookup_fn: Optional callback function(symbol) -> float
+                            to fetch current market prices
         
         Returns:
             List of position dictionaries per API_SPEC.md
         """
         positions = []
         for symbol, pos in self.positions.items():
+            current_price = None
+            unrealized_pnl = None
+            
+            # If price lookup function provided, fetch current price
+            if price_lookup_fn:
+                try:
+                    current_price = price_lookup_fn(symbol)
+                    # Calculate unrealized P&L
+                    # P&L = (current_price - avg_price) * quantity
+                    unrealized_pnl = (current_price - pos["avg_price"]) * pos["quantity"]
+                except Exception:
+                    # If price fetch fails, keep as None
+                    pass
+            
             positions.append({
                 "symbol": symbol,
                 "quantity": pos["quantity"],
                 "avg_price": pos["avg_price"],
-                "current_price": None,  # Would fetch from market in real impl
-                "unrealized_pnl": None  # Would calculate with current price
+                "current_price": current_price,
+                "unrealized_pnl": unrealized_pnl
             })
         return positions
+
     
     def get_trades(
         self,

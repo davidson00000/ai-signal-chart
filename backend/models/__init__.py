@@ -4,6 +4,7 @@ Pydantic models for EXITON backend
 from .candle import Candle
 from .signal import Signal
 from .trade import Trade, Position
+from .requests import PaperOrderRequest
 from .responses import (
     ChartDataResponse,
     SignalResponse,
@@ -19,6 +20,7 @@ __all__ = [
     "Signal",
     "Trade",
     "Position",
+    "PaperOrderRequest",
     "ChartDataResponse",
     "SignalResponse",
     "OrderResponse",
