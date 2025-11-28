@@ -1,0 +1,50 @@
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from data_feed import get_chart_data
+from strategy import generate_signal
+from paper_trade import PaperTrader
+
+app = FastAPI()
+
+# CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Paper trade object
+trader = PaperTrader()
+
+@app.get("/health")
+def health_check():
+    return {"status": "ok"}
+
+@app.get("/chart-data")
+def chart_data(symbol: str = "AAPL"):
+    data = get_chart_data(symbol)
+    return data
+
+@app.get("/signal")
+def signal(symbol: str = "AAPL"):
+    data = get_chart_data(symbol)
+    sig = generate_signal(data)
+    return {"symbol": symbol, "signal": sig}
+
+@app.post("/paper-order")
+def place_order(symbol: str, side: str, qty: int):
+    order = trader.execute_order(symbol, side, qty)
+    return order
+
+@app.get("/positions")
+def positions():
+    return trader.get_positions()
+
+@app.get("/trades")
+def trades():
+    return trader.get_trades()
+
+@app.get("/pnl")
+def pnl():
+    return {"pnl": trader.total_pnl()}
