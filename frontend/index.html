@@ -255,6 +255,38 @@
 
     <script>
 
+        // ローソク足から単純移動平均（SMA）を計算
+        function computeSMA(candles, windowSize) {
+            const result = [];
+            if (!Array.isArray(candles) || candles.length === 0) return result;
+
+            let sum = 0;
+
+            for (let i = 0; i < candles.length; i++) {
+                const price = candles[i].close;
+                if (typeof price !== "number") continue;
+
+                sum += price;
+
+                // window サイズを超えたら古い分を引く
+                if (i >= windowSize) {
+                    sum -= candles[i - windowSize].close;
+                }
+
+                // window サイズに達したところから平均値を出す
+                if (i >= windowSize - 1) {
+                    const ma = sum / windowSize;
+                    result.push({
+                        time: candles[i].time,   // ローソク足の時刻に揃える
+                        value: ma,
+                    });
+                }
+            }
+
+            return result;
+        }
+
+
         function focusOnTrade(entryTime, exitTime) {
             // エントリー〜イグジットの前後にちょっと余白をつける（秒）
             const margin = 5 * 60; // 5分分の余白（timeframeによって好みで調整）
@@ -336,22 +368,21 @@
             }));
             candleSeries.setData(candles);
 
-            // MA線のデータ更新
-            const shortMaData = data.short_ma.map((p) => ({
-                time: p.time,
-                value: p.value,
-            }));
-            const longMaData = data.long_ma.map((p) => ({
-                time: p.time,
-                value: p.value,
-            }));
+            // === MA 計算 ===
+            const shortWindow = Number(document.getElementById("short_window").value);
+            const longWindow = Number(document.getElementById("long_window").value);
+
+            const shortMaData = computeSMA(candles, shortWindow);
+            const longMaData = computeSMA(candles, longWindow);
+
             shortMaSeries.setData(shortMaData);
             longMaSeries.setData(longMaData);
 
-            // 表示/非表示の状態を反映
+            // 表示/非表示
             shortMaSeries.applyOptions({ visible: showShortMaCheckbox.checked });
             longMaSeries.applyOptions({ visible: showLongMaCheckbox.checked });
 
+            // === シグナル ===
             const markers = data.signals.map((signal) => ({
                 time: signal.time,
                 position: signal.side === "BUY" ? "belowBar" : "aboveBar",
@@ -361,6 +392,7 @@
             }));
             candleSeries.setMarkers(markers);
 
+            // === TP/SL ライン ===
             if (tpLine) candleSeries.removePriceLine(tpLine);
             if (slLine) candleSeries.removePriceLine(slLine);
 
@@ -370,20 +402,17 @@
                     price: last.take_profit,
                     color: "#2ea043",
                     lineWidth: 1,
-                    lineStyle: 0,
-                    axisLabelVisible: true,
                     title: `${last.side} TP`,
                 });
                 slLine = candleSeries.createPriceLine({
                     price: last.stop_loss,
                     color: "#f85149",
                     lineWidth: 1,
-                    lineStyle: 0,
-                    axisLabelVisible: true,
                     title: `${last.side} SL`,
                 });
             }
         }
+
 
         function formatTime(sec) {
             const d = new Date(sec * 1000);
