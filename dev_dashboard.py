@@ -10,6 +10,9 @@ import pandas as pd
 from datetime import datetime
 from typing import Dict, List, Any, Optional
 
+import plotly.graph_objects as go  # ★これを追加
+
+
 # API Configuration
 API_BASE = "http://127.0.0.1:8000"
 
@@ -128,6 +131,28 @@ def fetch_pnl() -> Optional[Dict]:
         return None
 
 
+# === Helper Functions ===
+
+def align_to_step(v: float, min_v: float, max_v: float, step: float) -> float:
+    """
+    Align a value to slider's min/max/step constraints
+    
+    Args:
+        v: Value to align
+        min_v: Minimum allowed value
+        max_v: Maximum allowed value
+        step: Step size
+    
+    Returns:
+        Value clipped to [min_v, max_v] and aligned to step grid
+    """
+    # Clip to range
+    v = max(min_v, min(max_v, v))
+    # Align to step grid
+    n = round((v - min_v) / step)
+    return float(min_v + n * step)
+
+
 # === UI Components ===
 
 def render_sidebar():
@@ -186,56 +211,181 @@ def render_sidebar():
 
 
 def render_chart(data: Dict):
-    """Render candlestick chart with MA lines"""
+    """Render interactive Plotly chart with MA toggle and Y-axis zoom"""
     st.subheader("📈 Price Chart")
-    
+
+    # --- Safety check ---
     if not data or "candles" not in data:
         st.warning("No chart data available")
         return
-    
-    # Convert candles to DataFrame
+
     candles = data["candles"]
     if not candles:
         st.warning("No candles data")
         return
-    
+
+    # --- DataFrame 化 ---
     df = pd.DataFrame(candles)
     df["time"] = pd.to_datetime(df["time"], unit="s")
-    df.set_index("time", inplace=True)
-    
-    # Prepare chart data
-    chart_data = pd.DataFrame({
-        "Close": df["close"],
-    })
-    
-    # Add MA lines if available
-    if "shortMA" in data and data["shortMA"]:
-        short_ma = [x for x in data["shortMA"] if x is not None]
-        if short_ma:
-            chart_data["Short MA"] = data["shortMA"][-len(df):]
-    
-    if "longMA" in data and data["longMA"]:
-        long_ma = [x for x in data["longMA"] if x is not None]
-        if long_ma:
-            chart_data["Long MA"] = data["longMA"][-len(df):]
-    
-    # Display chart
-    st.line_chart(chart_data, height=400)
-    
-    # Display stats
+
+    # MA を DataFrame に載せる（長さが合わない場合は切り詰め）
+    if "shortMA" in data:
+        short_ma = data["shortMA"][: len(df)]
+        df["shortMA"] = short_ma
+    else:
+        df["shortMA"] = None
+
+    if "longMA" in data:
+        long_ma = data["longMA"][: len(df)]
+        df["longMA"] = long_ma
+    else:
+        df["longMA"] = None
+
+    # ====== Y軸レンジのベース値計算 ======
+    price_min = float(df["close"].min())
+    price_max = float(df["close"].max())
+
+    # 価格が全部同じなどでレンジがゼロの場合
+    if price_max == price_min:
+        price_max = price_min + 1.0
+
+    # データの min/max から 5% 余白をつけた「デフォルト FIT レンジ」
+    base_span = price_max - price_min
+    padding = max(base_span * 0.12, 1.0)  # 最低 0.5 は余白をつける
+
+    default_y_min = price_min - padding
+    default_y_max = price_max + padding
+
+    # スライダー全体の min/max（デフォルトより広めに）
+    slider_min = price_min - padding * 3
+    slider_max = price_max + padding * 3
+
+    # 価格がマイナスにならないように軽くガード（株価用）
+    if slider_min < 0:
+        slider_min = 0.0
+
+    # データが変わったかどうかを判定するための簡易ハッシュ
+    data_hash = hash(tuple(round(v, 4) for v in df["close"].tolist()))
+
+    if "y_range" not in st.session_state:
+        st.session_state["y_range"] = (default_y_min, default_y_max)
+        st.session_state["y_range_data_hash"] = data_hash
+    else:
+        # シンボルやタイムフレーム変更でデータが変わったらリセット
+        if st.session_state.get("y_range_data_hash") != data_hash:
+            st.session_state["y_range"] = (default_y_min, default_y_max)
+            st.session_state["y_range_data_hash"] = data_hash
+
+    # ====== UI（MAトグル & FITボタン） ======
+    col_left, col_right = st.columns([3, 1])
+
+    with col_left:
+        c1, c2 = st.columns(2)
+        with c1:
+            show_short_ma = st.checkbox("Show Short\nMA", value=True)
+        with c2:
+            show_long_ma = st.checkbox("Show Long\nMA", value=True)
+
+    with col_right:
+        fit_clicked = st.button("FIT", use_container_width=True)
+
+    # FIT が押されたら、y_range をデフォルトレンジにリセット
+    if fit_clicked:
+        st.session_state["y_range"] = (default_y_min, default_y_max)
+        st.rerun()  # 強制的に再描画
+
+    # ====== Y軸スライダー ======
+    current_low, current_high = st.session_state["y_range"]
+
+    # スライダーの min/max の外に飛んでいたらクリップ
+    current_low = max(slider_min, min(current_low, slider_max))
+    current_high = max(slider_min, min(current_high, slider_max))
+
+    if current_low >= current_high:
+        current_low, current_high = default_y_min, default_y_max
+
+    # ステップ幅（雑に 200 分割くらい）
+    step = (slider_max - slider_min) / 200.0
+    if step <= 0:
+        step = 0.1
+
+    y_min, y_max = st.slider(
+        "Price Range (Y-axis Zoom)",
+        min_value=float(slider_min),
+        max_value=float(slider_max),
+        value=(float(current_low), float(current_high)),
+        step=float(step),
+        format="%.2f",
+        key="y_range",  # session_stateと同じ名前で自動同期
+    )
+
+    # Note: key="y_range" により自動的に st.session_state["y_range"] と同期される
+
+    # ====== Plotly チャート描画 ======
+    fig = go.Figure()
+
+    # Close price
+    fig.add_trace(
+        go.Scatter(
+            x=df["time"],
+            y=df["close"],
+            mode="lines",
+            name="Close",
+            line=dict(width=2),
+        )
+    )
+
+    # 短期 MA
+    if show_short_ma and df["shortMA"].notna().any():
+        fig.add_trace(
+            go.Scatter(
+                x=df["time"],
+                y=df["shortMA"],
+                mode="lines",
+                name="Short MA",
+                line=dict(width=1.5, dash="dot"),
+            )
+        )
+
+    # 長期 MA
+    if show_long_ma and df["longMA"].notna().any():
+        fig.add_trace(
+            go.Scatter(
+                x=df["time"],
+                y=df["longMA"],
+                mode="lines",
+                name="Long MA",
+                line=dict(width=1.5, dash="dash"),
+            )
+        )
+
+    # Y軸レンジをスライダーと完全同期
+    fig.update_yaxes(range=[y_min, y_max], title_text="Price")
+    fig.update_xaxes(title_text="Time")
+
+    fig.update_layout(
+        margin=dict(l=40, r=20, t=30, b=40),
+        height=420,
+        showlegend=True,
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+    # ====== 下のメトリクス類 ======
     cols = st.columns(4)
+
     if "stats" in data:
         stats = data["stats"]
         cols[0].metric("Trades", stats.get("tradeCount", 0))
         cols[1].metric("Win Rate", f"{stats.get('winRate', 0):.1f}%")
         cols[2].metric("Total P&L", f"{stats.get('pnlPercent', 0):.2f}%")
-    
-    # Latest price
+
     if not df.empty:
         latest_close = df["close"].iloc[-1]
         prev_close = df["close"].iloc[-2] if len(df) > 1 else latest_close
         change = ((latest_close - prev_close) / prev_close * 100) if prev_close else 0
         cols[3].metric("Latest Close", f"${latest_close:.2f}", f"{change:+.2f}%")
+
 
 
 def render_signal_and_orders(symbol: str, timeframe: str, quantity: int):

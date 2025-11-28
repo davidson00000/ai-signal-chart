@@ -5,3 +5,4 @@ yfinance
 pydantic
 streamlit
 requests
+plotly
