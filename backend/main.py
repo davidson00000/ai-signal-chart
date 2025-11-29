@@ -362,6 +362,139 @@ async def optimize_parameters(request: OptimizationRequest) -> OptimizationRespo
         )
 
 
+@app.post("/experiments", status_code=201)
+async def create_experiment_endpoint(experiment: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Create new experiment
+    
+    Args:
+        experiment: Experiment data including name, strategy, parameters, and results
+    
+    Returns:
+        Created experiment with ID
+    """
+    try:
+        from backend.experiments_manager import ExperimentsManager, ExperimentCreate
+        
+        manager = ExperimentsManager()
+        exp_create = ExperimentCreate(**experiment)
+        created_exp = manager.create_experiment(exp_create)
+        
+        return created_exp.model_dump()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to create experiment: {str(e)}")
+
+
+@app.get("/experiments")
+async def list_experiments_endpoint(limit: int = 100, offset: int = 0) -> Dict[str, Any]:
+    """
+    List all experiments
+    
+    Args:
+        limit: Maximum number of experiments to return
+        offset: Number of experiments to skip
+    
+    Returns:
+        List of experiments with summary
+    """
+    try:
+        from backend.experiments_manager import ExperimentsManager
+        
+        manager = ExperimentsManager()
+        experiments = manager.list_experiments(limit=limit, offset=offset)
+        summary = manager.get_experiments_summary()
+        
+        return {
+            "experiments": [exp.model_dump() for exp in experiments],
+            "summary": summary,
+            "count": len(experiments)
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to list experiments: {str(e)}")
+
+
+@app.get("/experiments/{experiment_id}")
+async def get_experiment_endpoint(experiment_id: str) -> Dict[str, Any]:
+    """
+    Get experiment by ID
+    
+    Args:
+        experiment_id: Experiment ID
+    
+    Returns:
+        Experiment data
+    """
+    try:
+        from backend.experiments_manager import ExperimentsManager
+        
+        manager = ExperimentsManager()
+        experiment = manager.get_experiment(experiment_id)
+        
+        if not experiment:
+            raise HTTPException(status_code=404, detail="Experiment not found")
+        
+        return experiment.model_dump()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get experiment: {str(e)}")
+
+
+@app.put("/experiments/{experiment_id}")
+async def update_experiment_endpoint(experiment_id: str, updates: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Update experiment
+    
+    Args:
+        experiment_id: Experiment ID
+        updates: Fields to update
+    
+    Returns:
+        Updated experiment
+    """
+    try:
+        from backend.experiments_manager import ExperimentsManager
+        
+        manager = ExperimentsManager()
+        updated_exp = manager.update_experiment(experiment_id, updates)
+        
+        if not updated_exp:
+            raise HTTPException(status_code=404, detail="Experiment not found")
+        
+        return updated_exp.model_dump()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to update experiment: {str(e)}")
+
+
+@app.delete("/experiments/{experiment_id}")
+async def delete_experiment_endpoint(experiment_id: str) -> Dict[str, str]:
+    """
+    Delete experiment
+    
+    Args:
+        experiment_id: Experiment ID
+    
+    Returns:
+        Success message
+    """
+    try:
+        from backend.experiments_manager import ExperimentsManager
+        
+        manager = ExperimentsManager()
+        success = manager.delete_experiment(experiment_id)
+        
+        if not success:
+            raise HTTPException(status_code=404, detail="Experiment not found")
+        
+        return {"message": "Experiment deleted successfully", "id": experiment_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to delete experiment: {str(e)}")
+
+
 # `python -m backend.main` で起動できるように
 if __name__ == "__main__":
     import uvicorn

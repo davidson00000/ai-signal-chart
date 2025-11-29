@@ -122,11 +122,39 @@ export async function runBacktest(
 // ======================
 
 export async function createExperiment(
-    payload: BacktestExperimentCreate,
+    exp: BacktestExperimentCreate,
 ): Promise<BacktestExperiment> {
+    // Transform to match backend ExperimentCreate model
+    const payload = {
+        name: exp.name,
+        description: exp.description,
+        strategy_type: exp.request.strategy || 'ma_cross',  // Use strategy from request, default to 'ma_cross'
+        symbol: exp.request.symbol,
+        timeframe: exp.request.timeframe || '1d',
+        start_date: exp.request.start_date || null,
+        end_date: exp.request.end_date || null,
+        parameters: {
+            short_window: exp.request.short_window,
+            long_window: exp.request.long_window,
+            initial_capital: exp.request.initial_capital,
+            commission: exp.request.commission,
+            position_size: exp.request.position_size,
+        },
+        results: exp.result ? {
+            total_pnl: exp.result.metrics.total_pnl,
+            return_pct: exp.result.metrics.return_pct,
+            win_rate: exp.result.metrics.win_rate,
+            max_drawdown: exp.result.metrics.max_drawdown,
+            trade_count: exp.result.metrics.trade_count,
+            sharpe_ratio: exp.result.metrics.sharpe_ratio,
+        } : null,
+    };
+
     const res = await fetch(`${API_BASE}/experiments`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+            'Content-Type': 'application/json',
+        },
         body: JSON.stringify(payload),
     });
 
@@ -158,7 +186,10 @@ export async function listExperiments(): Promise<BacktestExperimentSummary[]> {
         throw new Error(detail || 'List experiments failed');
     }
 
-    return res.json();
+    const data = await res.json();
+    // Backend returns {experiments: [...], summary: {...}, count: N}
+    // Extract the experiments array
+    return data.experiments || [];
 }
 
 export async function getExperiment(
