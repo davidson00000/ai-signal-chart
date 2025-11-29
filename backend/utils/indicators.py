@@ -35,3 +35,52 @@ def simple_moving_average(values: List[float], window: int) -> List[Optional[flo
         else:
             ma.append(None)
     return ma
+
+
+def rsi(values: List[float], period: int = 14) -> List[Optional[float]]:
+    """
+    Relative Strength Index (RSI) 計算
+    
+    Args:
+        values: List of prices (close prices typically)
+        period: RSI period (default: 14)
+        
+    Returns:
+        List of RSI values (0-100) with None for insufficient data points
+    """
+    if period <= 0:
+        raise ValueError("period must be positive")
+    
+    if len(values) < period + 1:
+        return [None] * len(values)
+    
+    # Calculate price changes
+    deltas = [values[i] - values[i-1] for i in range(1, len(values))]
+    gains = [max(d, 0.0) for d in deltas]
+    losses = [abs(min(d, 0.0)) for d in deltas]
+    
+    # Initial average
+    avg_gain = sum(gains[:period]) / period
+    avg_loss = sum(losses[:period]) / period
+    
+    rsi_values: List[Optional[float]] = [None] * (period + 1)
+    
+    # First RSI value
+    if avg_loss == 0:
+        rsi_values.append(100.0)
+    else:
+        rs = avg_gain / avg_loss
+        rsi_values.append(100.0 - (100.0 / (1.0 + rs)))
+    
+    # Subsequent RSI values using smoothed moving average
+    for i in range(period, len(deltas)):
+        avg_gain = (avg_gain * (period - 1) + gains[i]) / period
+        avg_loss = (avg_loss * (period - 1) + losses[i]) / period
+        
+        if avg_loss == 0:
+            rsi_values.append(100.0)
+        else:
+            rs = avg_gain / avg_loss
+            rsi_values.append(100.0 - (100.0 / (1.0 + rs)))
+    
+    return rsi_values

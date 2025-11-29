@@ -22,6 +22,7 @@ import {
     XAxis,
     YAxis,
 } from 'recharts';
+import CandlestickChart from './components/CandlestickChart';
 
 type TabKey = 'backtest' | 'experiments' | 'opt' | 'lab';
 
@@ -503,6 +504,19 @@ function App() {
 
                     {/* Right side: Tabs content + Results */}
                     <div className="space-y-4">
+                        {/* Chart Display (always visible in backtest tab) */}
+                        {activeTab === 'backtest' && (
+                            <section className="bg-slate-900/70 rounded-2xl p-6 shadow-xl shadow-sky-900/40 border border-slate-800/70">
+                                <CandlestickChart
+                                    symbol={request.symbol}
+                                    interval={request.timeframe || '1d'}
+                                    showMA={true}
+                                    shortWindow={request.short_window || 9}
+                                    longWindow={request.long_window || 21}
+                                />
+                            </section>
+                        )}
+
                         {/* Experiments tab */}
                         {activeTab === 'experiments' && (
                             <section className="bg-slate-900/70 rounded-2xl p-6 shadow-xl shadow-sky-900/40 border border-slate-800/70 space-y-6">
@@ -1015,10 +1029,10 @@ function App() {
                                                             </td>
                                                             <td
                                                                 className={`py-1.5 pr-3 text-right ${t.pnl !== undefined && t.pnl !== null
-                                                                        ? t.pnl > 0
-                                                                            ? 'text-emerald-300'
-                                                                            : 'text-rose-300'
-                                                                        : 'text-slate-200'
+                                                                    ? t.pnl > 0
+                                                                        ? 'text-emerald-300'
+                                                                        : 'text-rose-300'
+                                                                    : 'text-slate-200'
                                                                     }`}
                                                             >
                                                                 {t.pnl !== undefined && t.pnl !== null
