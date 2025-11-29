@@ -7,9 +7,12 @@ import {
     BacktestExperiment,
     BacktestExperimentSummary,
     OptimizationRequest,
+    StrategyLabBatchRequest,
+    StrategyLabSymbolResult,
     runBacktest,
     runExperiment,
     runOptimization,
+    runStrategyLabBatch,
     createExperiment,
     listExperiments,
     getExperiment,
@@ -87,6 +90,28 @@ function App() {
     );
     const [optLoading, setOptLoading] = useState(false);
     const [optError, setOptError] = useState<string | null>(null);
+
+    // Strategy Lab
+    const [labConfig, setLabConfig] = useState<StrategyLabBatchRequest>({
+        study_name: 'My Strategy Study',
+        symbols: ['7203.T', '6758.T', '9984.T'], // Default examples
+        timeframe: '1d',
+        strategy_type: 'ma_cross',
+        initial_capital: 1000000,
+        commission_rate: 0.001,
+        position_size: 1.0,
+        short_ma_min: 5,
+        short_ma_max: 20,
+        short_ma_step: 1,
+        long_ma_min: 20,
+        long_ma_max: 60,
+        long_ma_step: 5,
+        metric: 'total_return',
+    });
+    const [labResults, setLabResults] = useState<StrategyLabSymbolResult[] | null>(null);
+    const [labLoading, setLabLoading] = useState(false);
+    const [labError, setLabError] = useState<string | null>(null);
+    const [labSymbolsInput, setLabSymbolsInput] = useState('7203.T, 6758.T, 9984.T');
 
     // Experimentsタブを開いたら一覧更新
     useEffect(() => {
@@ -224,6 +249,48 @@ function App() {
         // ここでは自動実行はせず、「Run Simulation」はユーザーに任せる
     }
 
+    // Strategy Lab Handlers
+    async function handleRunStrategyLab() {
+        setLabLoading(true);
+        setLabError(null);
+        setLabResults(null);
+
+        try {
+            // Parse symbols from input
+            const symbols = labSymbolsInput
+                .split(',')
+                .map(s => s.trim())
+                .filter(s => s.length > 0);
+
+            if (symbols.length === 0) {
+                throw new Error("Please enter at least one symbol");
+            }
+
+            const req: StrategyLabBatchRequest = {
+                ...labConfig,
+                symbols: symbols
+            };
+
+            const response = await runStrategyLabBatch(req);
+            setLabResults(response.results);
+        } catch (err: any) {
+            console.error(err);
+            setLabError(err.message || 'Strategy Lab run failed');
+        } finally {
+            setLabLoading(false);
+        }
+    }
+
+    function handleApplyFromLab(res: StrategyLabSymbolResult) {
+        setRequest((prev) => ({
+            ...prev,
+            symbol: res.symbol,
+            short_window: res.short_window,
+            long_window: res.long_window,
+        }));
+        setActiveTab('backtest');
+    }
+
     async function handleSaveExperiment() {
         if (!expName.trim()) {
             setError('Experiment name is required');
@@ -269,23 +336,42 @@ function App() {
                 {/* Tabs */}
                 <div className="mb-6 border-b border-slate-800/70">
                     <nav className="-mb-px flex gap-4 text-sm">
-                        {[
-                            { key: 'backtest' as TabKey, label: 'Backtest' },
-                            { key: 'experiments' as TabKey, label: 'Experiments' },
-                            { key: 'opt' as TabKey, label: 'Optimization' },
-                            { key: 'lab' as TabKey, label: 'Strategy Lab (coming soon)' },
-                        ].map((tab) => (
-                            <button
-                                key={tab.key}
-                                className={`px-3 py-2 border-b-2 transition-colors ${activeTab === tab.key
-                                    ? 'border-sky-400 text-sky-300'
-                                    : 'border-transparent text-slate-500 hover:text-slate-200'
-                                    }`}
-                                onClick={() => setActiveTab(tab.key)}
-                            >
-                                {tab.label}
-                            </button>
-                        ))}
+                        <button
+                            onClick={() => setActiveTab('backtest')}
+                            className={`px-3 py-2 border-b-2 transition-colors ${activeTab === 'backtest'
+                                ? 'border-sky-400 text-sky-300'
+                                : 'border-transparent text-slate-500 hover:text-slate-200'
+                                }`}
+                        >
+                            Backtest
+                        </button>
+                        <button
+                            onClick={() => setActiveTab('experiments')}
+                            className={`px-3 py-2 border-b-2 transition-colors ${activeTab === 'experiments'
+                                ? 'border-sky-400 text-sky-300'
+                                : 'border-transparent text-slate-500 hover:text-slate-200'
+                                }`}
+                        >
+                            Experiments
+                        </button>
+                        <button
+                            onClick={() => setActiveTab('opt')}
+                            className={`px-3 py-2 border-b-2 transition-colors ${activeTab === 'opt'
+                                ? 'border-purple-400 text-purple-300'
+                                : 'border-transparent text-slate-500 hover:text-slate-200'
+                                }`}
+                        >
+                            Optimization
+                        </button>
+                        <button
+                            onClick={() => setActiveTab('lab')}
+                            className={`px-3 py-2 border-b-2 transition-colors ${activeTab === 'lab'
+                                ? 'border-indigo-400 text-indigo-300'
+                                : 'border-transparent text-slate-500 hover:text-slate-200'
+                                }`}
+                        >
+                            Strategy Lab
+                        </button>
                     </nav>
                 </div>
 
@@ -1061,6 +1147,217 @@ function App() {
                                                     ))}
                                                 </tbody>
                                             </table>
+                                        </div>
+                                    )}
+                                </div>
+                            </section>
+                        )}
+
+                        {/* Strategy Lab Tab */}
+                        {activeTab === 'lab' && (
+                            <section className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+                                <div className="bg-slate-900/50 rounded-xl p-6 border border-slate-800 backdrop-blur-sm">
+                                    <h2 className="text-xl font-bold mb-4 flex items-center gap-2 text-indigo-400">
+                                        <span className="text-2xl">🧪</span> Strategy Lab
+                                    </h2>
+
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                                        {/* Left: Settings */}
+                                        <div className="space-y-4">
+                                            <div>
+                                                <label className="block text-xs font-medium text-slate-400 mb-1">
+                                                    Study Name
+                                                </label>
+                                                <input
+                                                    type="text"
+                                                    value={labConfig.study_name}
+                                                    onChange={(e) => setLabConfig({ ...labConfig, study_name: e.target.value })}
+                                                    className="w-full bg-slate-950 border border-slate-800 rounded px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none transition-all"
+                                                />
+                                            </div>
+
+                                            <div>
+                                                <label className="block text-xs font-medium text-slate-400 mb-1">
+                                                    Symbols (comma separated)
+                                                </label>
+                                                <textarea
+                                                    value={labSymbolsInput}
+                                                    onChange={(e) => setLabSymbolsInput(e.target.value)}
+                                                    className="w-full h-24 bg-slate-950 border border-slate-800 rounded px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none transition-all font-mono"
+                                                    placeholder="7203.T, 6758.T, 9984.T"
+                                                />
+                                            </div>
+
+                                            <div className="grid grid-cols-2 gap-4">
+                                                <div>
+                                                    <label className="block text-xs font-medium text-slate-400 mb-1">
+                                                        Metric
+                                                    </label>
+                                                    <select
+                                                        value={labConfig.metric}
+                                                        onChange={(e) => setLabConfig({ ...labConfig, metric: e.target.value as any })}
+                                                        className="w-full bg-slate-950 border border-slate-800 rounded px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                                                    >
+                                                        <option value="total_return">Total Return</option>
+                                                        <option value="sharpe">Sharpe Ratio</option>
+                                                    </select>
+                                                </div>
+                                                <div>
+                                                    <label className="block text-xs font-medium text-slate-400 mb-1">
+                                                        Strategy
+                                                    </label>
+                                                    <select
+                                                        value={labConfig.strategy_type}
+                                                        disabled
+                                                        className="w-full bg-slate-950 border border-slate-800 rounded px-3 py-2 text-sm opacity-60 cursor-not-allowed"
+                                                    >
+                                                        <option value="ma_cross">MA Cross</option>
+                                                    </select>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        {/* Right: Range Settings */}
+                                        <div className="bg-slate-950/60 rounded-xl p-4 border border-slate-800/80">
+                                            <h3 className="font-semibold text-sm text-slate-300 mb-3">Search Range</h3>
+
+                                            <div className="space-y-4">
+                                                <div className="grid grid-cols-3 gap-2">
+                                                    <div>
+                                                        <label className="block text-[10px] text-slate-500 mb-1">Short Min</label>
+                                                        <input
+                                                            type="number"
+                                                            value={labConfig.short_ma_min}
+                                                            onChange={(e) => setLabConfig({ ...labConfig, short_ma_min: Number(e.target.value) })}
+                                                            className="w-full bg-slate-900 border border-slate-800 rounded px-2 py-1.5 text-sm"
+                                                        />
+                                                    </div>
+                                                    <div>
+                                                        <label className="block text-[10px] text-slate-500 mb-1">Short Max</label>
+                                                        <input
+                                                            type="number"
+                                                            value={labConfig.short_ma_max}
+                                                            onChange={(e) => setLabConfig({ ...labConfig, short_ma_max: Number(e.target.value) })}
+                                                            className="w-full bg-slate-900 border border-slate-800 rounded px-2 py-1.5 text-sm"
+                                                        />
+                                                    </div>
+                                                    <div>
+                                                        <label className="block text-[10px] text-slate-500 mb-1">Step</label>
+                                                        <input
+                                                            type="number"
+                                                            value={labConfig.short_ma_step}
+                                                            onChange={(e) => setLabConfig({ ...labConfig, short_ma_step: Number(e.target.value) })}
+                                                            className="w-full bg-slate-900 border border-slate-800 rounded px-2 py-1.5 text-sm"
+                                                        />
+                                                    </div>
+                                                </div>
+
+                                                <div className="grid grid-cols-3 gap-2">
+                                                    <div>
+                                                        <label className="block text-[10px] text-slate-500 mb-1">Long Min</label>
+                                                        <input
+                                                            type="number"
+                                                            value={labConfig.long_ma_min}
+                                                            onChange={(e) => setLabConfig({ ...labConfig, long_ma_min: Number(e.target.value) })}
+                                                            className="w-full bg-slate-900 border border-slate-800 rounded px-2 py-1.5 text-sm"
+                                                        />
+                                                    </div>
+                                                    <div>
+                                                        <label className="block text-[10px] text-slate-500 mb-1">Long Max</label>
+                                                        <input
+                                                            type="number"
+                                                            value={labConfig.long_ma_max}
+                                                            onChange={(e) => setLabConfig({ ...labConfig, long_ma_max: Number(e.target.value) })}
+                                                            className="w-full bg-slate-900 border border-slate-800 rounded px-2 py-1.5 text-sm"
+                                                        />
+                                                    </div>
+                                                    <div>
+                                                        <label className="block text-[10px] text-slate-500 mb-1">Step</label>
+                                                        <input
+                                                            type="number"
+                                                            value={labConfig.long_ma_step}
+                                                            onChange={(e) => setLabConfig({ ...labConfig, long_ma_step: Number(e.target.value) })}
+                                                            className="w-full bg-slate-900 border border-slate-800 rounded px-2 py-1.5 text-sm"
+                                                        />
+                                                    </div>
+                                                </div>
+                                            </div>
+
+                                            <button
+                                                onClick={handleRunStrategyLab}
+                                                disabled={labLoading}
+                                                className="w-full mt-6 px-4 py-2 rounded-md bg-indigo-500 hover:bg-indigo-600 text-sm font-semibold disabled:opacity-60 shadow-md shadow-indigo-800/60 transition-all"
+                                            >
+                                                {labLoading ? 'Running Batch Study...' : '🚀 Run Study'}
+                                            </button>
+
+                                            {labError && (
+                                                <p className="text-red-400 text-xs mt-2">⚠ {labError}</p>
+                                            )}
+                                        </div>
+                                    </div>
+
+                                    {/* Results Table */}
+                                    {labResults && (
+                                        <div className="mt-8">
+                                            <h3 className="font-semibold text-sm text-slate-200 mb-3">
+                                                Leaderboard (Sorted by {labConfig.metric === 'sharpe' ? 'Sharpe Ratio' : 'Total Return'})
+                                            </h3>
+                                            <div className="overflow-x-auto rounded-lg border border-slate-800">
+                                                <table className="w-full text-sm text-left text-slate-300">
+                                                    <thead className="text-xs text-slate-400 uppercase bg-slate-950/80">
+                                                        <tr>
+                                                            <th className="px-4 py-3">Rank</th>
+                                                            <th className="px-4 py-3">Symbol</th>
+                                                            <th className="px-4 py-3 text-right">Short</th>
+                                                            <th className="px-4 py-3 text-right">Long</th>
+                                                            <th className="px-4 py-3 text-right">Return</th>
+                                                            <th className="px-4 py-3 text-right">Max DD</th>
+                                                            <th className="px-4 py-3 text-right">Sharpe</th>
+                                                            <th className="px-4 py-3 text-right">Win Rate</th>
+                                                            <th className="px-4 py-3 text-right">Trades</th>
+                                                            <th className="px-4 py-3 text-center">Actions</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody>
+                                                        {labResults.map((res) => (
+                                                            <tr
+                                                                key={res.symbol}
+                                                                className={`border-b border-slate-800/60 hover:bg-slate-800/40 transition-colors ${res.rank === 1 ? 'bg-indigo-900/10' : ''
+                                                                    }`}
+                                                            >
+                                                                <td className="px-4 py-3 font-medium">
+                                                                    {res.rank === 1 ? <span className="text-yellow-400">★ 1</span> : res.rank}
+                                                                </td>
+                                                                <td className="px-4 py-3 font-mono text-indigo-300">{res.symbol}</td>
+                                                                <td className="px-4 py-3 text-right">{res.short_window}</td>
+                                                                <td className="px-4 py-3 text-right">{res.long_window}</td>
+                                                                <td className={`px-4 py-3 text-right font-semibold ${res.total_return > 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                                                    {percentFmt.format(res.total_return / 100)}
+                                                                </td>
+                                                                <td className="px-4 py-3 text-right text-rose-300">
+                                                                    {percentFmt.format(res.max_drawdown)}
+                                                                </td>
+                                                                <td className="px-4 py-3 text-right">
+                                                                    {res.sharpe ? res.sharpe.toFixed(2) : '-'}
+                                                                </td>
+                                                                <td className="px-4 py-3 text-right">
+                                                                    {percentFmt.format(res.win_rate)}
+                                                                </td>
+                                                                <td className="px-4 py-3 text-right">{res.trades}</td>
+                                                                <td className="px-4 py-3 text-center">
+                                                                    <button
+                                                                        onClick={() => handleApplyFromLab(res)}
+                                                                        className="px-2 py-1 text-xs rounded bg-slate-800 hover:bg-indigo-600 text-indigo-300 hover:text-white border border-indigo-500/30 transition-colors"
+                                                                    >
+                                                                        Apply
+                                                                    </button>
+                                                                </td>
+                                                            </tr>
+                                                        ))}
+                                                    </tbody>
+                                                </table>
+                                            </div>
                                         </div>
                                     )}
                                 </div>

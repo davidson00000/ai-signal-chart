@@ -18,6 +18,11 @@ from backend.models.backtest import (
     TradeSummary,
 )
 from backend.models.optimization import OptimizationRequest, OptimizationResponse
+from backend.models.strategy_lab import (
+    StrategyLabBatchRequest,
+    StrategyLabBatchResponse,
+    StrategyLabSymbolResult
+)
 
 
 app = FastAPI(title="AI Signal Chart Backtest API", version="0.1.0")
@@ -359,6 +364,73 @@ async def optimize_parameters(request: OptimizationRequest) -> OptimizationRespo
         raise HTTPException(
             status_code=500,
             detail=f"Optimization failed: {str(e)}"
+        )
+
+
+@app.post("/strategy-lab/run-batch", response_model=StrategyLabBatchResponse)
+async def run_strategy_lab_batch(request: StrategyLabBatchRequest) -> StrategyLabBatchResponse:
+    """
+    Strategy Lab: Run batch optimization for multiple symbols
+    """
+    try:
+        from backend.optimizer import GridSearchOptimizer
+        
+        optimizer = GridSearchOptimizer()
+        
+        # Build parameter grid
+        param_grid = {}
+        
+        if request.strategy_type == "ma_cross":
+            param_grid["short_window"] = list(range(
+                request.short_ma_min,
+                request.short_ma_max + 1,
+                request.short_ma_step
+            ))
+            param_grid["long_window"] = list(range(
+                request.long_ma_min,
+                request.long_ma_max + 1,
+                request.long_ma_step
+            ))
+        
+        # Run batch optimization
+        results = optimizer.optimize_batch(
+            symbols=request.symbols,
+            timeframe=request.timeframe,
+            param_grid=param_grid,
+            metric=request.metric,
+            initial_capital=request.initial_capital,
+            commission_rate=request.commission_rate,
+            position_size=request.position_size,
+            strategy_type=request.strategy_type
+        )
+        
+        # Convert to response model
+        symbol_results = []
+        for res in results:
+            symbol_results.append(StrategyLabSymbolResult(
+                symbol=res["symbol"],
+                short_window=res["short_window"],
+                long_window=res["long_window"],
+                total_return=res["total_return"],
+                sharpe=res["sharpe"],
+                max_drawdown=res["max_drawdown"],
+                win_rate=res["win_rate"],
+                trades=res["trades"],
+                metric_score=res["metric_score"],
+                rank=res["rank"],
+                error=res["error"]
+            ))
+            
+        return StrategyLabBatchResponse(
+            study_name=request.study_name,
+            metric=request.metric,
+            results=symbol_results
+        )
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Strategy Lab batch run failed: {str(e)}"
         )
 
 

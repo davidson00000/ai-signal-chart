@@ -1,31 +1,13 @@
 """
-Pydantic models for EXITON backend
+Pydantic models for ai-signal-chart backend (backtest API only).
 """
-from .candle import Candle
-from .signal import Signal
-from .trade import Trade, Position
-from .requests import PaperOrderRequest
-from .responses import (
-    ChartDataResponse,
-    SignalResponse,
-    OrderResponse,
-    PositionsResponse,
-    TradesResponse,
-    PnLResponse,
-    HealthResponse,
-)
+
+from .requests import BacktestRequest
+from .responses import BacktestResponse, EquityCurvePoint, TradeSummary
 
 __all__ = [
-    "Candle",
-    "Signal",
-    "Trade",
-    "Position",
-    "PaperOrderRequest",
-    "ChartDataResponse",
-    "SignalResponse",
-    "OrderResponse",
-    "PositionsResponse",
-    "TradesResponse",
-    "PnLResponse",
-    "HealthResponse",
+    "BacktestRequest",
+    "BacktestResponse",
+    "EquityCurvePoint",
+    "TradeSummary",
 ]

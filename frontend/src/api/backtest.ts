@@ -332,3 +332,62 @@ export async function runSimulation(
 ): Promise<BacktestResponse> {
     return runBacktest(request);
 }
+// ======================
+// Strategy Lab API
+// ======================
+
+export interface StrategyLabBatchRequest {
+    study_name: string;
+    symbols: string[];
+    timeframe?: string;
+    strategy_type?: string;
+    initial_capital?: number;
+    commission_rate?: number;
+    position_size?: number;
+    short_ma_min: number;
+    short_ma_max: number;
+    short_ma_step: number;
+    long_ma_min: number;
+    long_ma_max: number;
+    long_ma_step: number;
+    metric?: 'total_return' | 'sharpe';
+}
+
+export interface StrategyLabSymbolResult {
+    symbol: string;
+    short_window: number;
+    long_window: number;
+    total_return: number;
+    sharpe: number | null;
+    max_drawdown: number;
+    win_rate: number;
+    trades: number;
+    metric_score: number;
+    rank: number;
+    error: string | null;
+}
+
+export interface StrategyLabBatchResponse {
+    study_name: string;
+    metric: string;
+    results: StrategyLabSymbolResult[];
+}
+
+export async function runStrategyLabBatch(
+    request: StrategyLabBatchRequest,
+): Promise<StrategyLabBatchResponse> {
+    const response = await fetch(`${API_BASE}/strategy-lab/run-batch`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(request),
+    });
+
+    if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.detail || 'Strategy Lab batch run failed');
+    }
+
+    return response.json();
+}
