@@ -1,0 +1,74 @@
+.metrics-panel {
+    background: #1a1a2e;
+    border-radius: 12px;
+    padding: 2rem;
+    margin-bottom: 2rem;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+}
+
+.metrics-header {
+    margin-bottom: 2rem;
+}
+
+.metrics-header h2 {
+    margin: 0 0 0.5rem 0;
+    color: #fff;
+    font-size: 1.5rem;
+}
+
+.metrics-subtitle {
+    color: #a0a0c0;
+    font-size: 0.875rem;
+}
+
+.separator {
+    margin: 0 0.5rem;
+}
+
+.metrics-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 1rem;
+}
+
+.metric-card {
+    background: #0f0f1e;
+    border: 1px solid #2a2a4e;
+    border-radius: 8px;
+    padding: 1.25rem;
+    transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.metric-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(74, 158, 255, 0.2);
+}
+
+.metric-label {
+    color: #a0a0c0;
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 0.5rem;
+}
+
+.metric-value {
+    color: #fff;
+    font-size: 1.5rem;
+    font-weight: 700;
+    margin-bottom: 0.25rem;
+}
+
+.metric-value.profit {
+    color: #4ade80;
+}
+
+.metric-value.loss {
+    color: #ff4a4a;
+}
+
+.metric-detail {
+    color: #7070a0;
+    font-size: 0.75rem;
+    margin-top: 0.5rem;
+}

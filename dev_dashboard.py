@@ -7,11 +7,10 @@ Run with: streamlit run dev_dashboard.py
 import streamlit as st
 import requests
 import pandas as pd
+import numpy as np
 from datetime import datetime
 from typing import Dict, List, Any, Optional
-
-import plotly.graph_objects as go  # ★これを追加
-
+import plotly.graph_objects as go
 
 # API Configuration
 API_BASE = "http://127.0.0.1:8000"
@@ -35,6 +34,24 @@ st.markdown("""
     }
 </style>
 """, unsafe_allow_html=True)
+
+
+# === Helper Functions ===
+
+def calculate_sma(values: pd.Series, window: int) -> pd.Series:
+    """
+    Calculate Simple Moving Average
+    
+    Args:
+        values: Price series
+        window: MA window period
+        
+    Returns:
+        MA series with NaN for insufficient data
+    """
+    if len(values) < window:
+        return pd.Series([np.nan] * len(values), index=values.index)
+    return values.rolling(window=window, min_periods=window).mean()
 
 
 # === API Functions ===
@@ -131,28 +148,6 @@ def fetch_pnl() -> Optional[Dict]:
         return None
 
 
-# === Helper Functions ===
-
-def align_to_step(v: float, min_v: float, max_v: float, step: float) -> float:
-    """
-    Align a value to slider's min/max/step constraints
-    
-    Args:
-        v: Value to align
-        min_v: Minimum allowed value
-        max_v: Maximum allowed value
-        step: Step size
-    
-    Returns:
-        Value clipped to [min_v, max_v] and aligned to step grid
-    """
-    # Clip to range
-    v = max(min_v, min(max_v, v))
-    # Align to step grid
-    n = round((v - min_v) / step)
-    return float(min_v + n * step)
-
-
 # === UI Components ===
 
 def render_sidebar():
@@ -189,10 +184,10 @@ def render_sidebar():
     limit = st.sidebar.slider(
         "Data Points",
         min_value=50,
-        max_value=500,
-        value=100,
+        max_value=3000,
+        value=500,
         step=50,
-        help="Number of candles to fetch"
+        help="Number of candles to fetch (max 3000)"
     )
     
     # Order quantity
@@ -204,188 +199,155 @@ def render_sidebar():
         help="Number of shares/units for orders"
     )
     
+    st.sidebar.markdown("---")
+    
+    # MA Period Selection
+    st.sidebar.subheader("📈 Moving Averages")
+    
+    # Preset MA periods
+    available_ma = [5, 9, 20, 21, 50, 60, 120, 200, 240]
+    
+    selected_ma = st.sidebar.multiselect(
+        "Select MA Periods",
+        options=available_ma,
+        default=[20, 60, 120, 240],
+        help="Choose moving average periods to display"
+    )
+    
+    # Custom MA input
+    custom_ma_text = st.sidebar.text_input(
+        "Custom MA Periods (comma-separated)",
+        placeholder="e.g., 10,30,100",
+        help="Add custom MA periods separated by commas"
+    )
+    
+    # Parse custom MA
+    if custom_ma_text:
+        try:
+            custom_periods = [int(x.strip()) for x in custom_ma_text.split(",") if x.strip()]
+            for period in custom_periods:
+                if period > 0 and period not in selected_ma:
+                    selected_ma.append(period)
+        except ValueError:
+            st.sidebar.warning("Invalid custom MA format. Use numbers separated by commas.")
+    
+    # Sort MA periods
+    selected_ma = sorted(selected_ma)
+    
+    st.sidebar.markdown("---")
+    
     # Refresh button
     refresh = st.sidebar.button("🔄 Refresh Data", type="primary", use_container_width=True)
     
-    return symbol, timeframe, limit, quantity, refresh
+    return symbol, timeframe, limit, quantity, selected_ma, refresh
 
 
-def render_chart(data: Dict):
-    """Render interactive Plotly chart with MA toggle and Y-axis zoom"""
-    st.subheader("📈 Price Chart")
-
-    # --- Safety check ---
-    if not data or "candles" not in data:
-        st.warning("No chart data available")
-        return
-
-    candles = data["candles"]
-    if not candles:
-        st.warning("No candles data")
-        return
-
-    # --- DataFrame 化 ---
-    df = pd.DataFrame(candles)
-    df["time"] = pd.to_datetime(df["time"], unit="s")
-
-    # MA を DataFrame に載せる（長さが合わない場合は切り詰め）
-    if "shortMA" in data:
-        short_ma = data["shortMA"][: len(df)]
-        df["shortMA"] = short_ma
-    else:
-        df["shortMA"] = None
-
-    if "longMA" in data:
-        long_ma = data["longMA"][: len(df)]
-        df["longMA"] = long_ma
-    else:
-        df["longMA"] = None
-
-    # ====== Y軸レンジのベース値計算 ======
-    price_min = float(df["close"].min())
-    price_max = float(df["close"].max())
-
-    # 価格が全部同じなどでレンジがゼロの場合
-    if price_max == price_min:
-        price_max = price_min + 1.0
-
-    # データの min/max から 5% 余白をつけた「デフォルト FIT レンジ」
-    base_span = price_max - price_min
-    padding = max(base_span * 0.12, 1.0)  # 最低 0.5 は余白をつける
-
-    default_y_min = price_min - padding
-    default_y_max = price_max + padding
-
-    # スライダー全体の min/max（デフォルトより広めに）
-    slider_min = price_min - padding * 3
-    slider_max = price_max + padding * 3
-
-    # 価格がマイナスにならないように軽くガード（株価用）
-    if slider_min < 0:
-        slider_min = 0.0
-
-    # データが変わったかどうかを判定するための簡易ハッシュ
-    data_hash = hash(tuple(round(v, 4) for v in df["close"].tolist()))
-
-    if "y_range" not in st.session_state:
-        st.session_state["y_range"] = (default_y_min, default_y_max)
-        st.session_state["y_range_data_hash"] = data_hash
-    else:
-        # シンボルやタイムフレーム変更でデータが変わったらリセット
-        if st.session_state.get("y_range_data_hash") != data_hash:
-            st.session_state["y_range"] = (default_y_min, default_y_max)
-            st.session_state["y_range_data_hash"] = data_hash
-
-    # ====== UI（MAトグル & FITボタン） ======
-    col_left, col_right = st.columns([3, 1])
-
-    with col_left:
-        c1, c2 = st.columns(2)
-        with c1:
-            show_short_ma = st.checkbox("Show Short\nMA", value=True)
-        with c2:
-            show_long_ma = st.checkbox("Show Long\nMA", value=True)
-
-    with col_right:
-        fit_clicked = st.button("FIT", use_container_width=True)
-
-    # FIT が押されたら、y_range をデフォルトレンジにリセット
-    if fit_clicked:
-        st.session_state["y_range"] = (default_y_min, default_y_max)
-        st.rerun()  # 強制的に再描画
-
-    # ====== Y軸スライダー ======
-    current_low, current_high = st.session_state["y_range"]
-
-    # スライダーの min/max の外に飛んでいたらクリップ
-    current_low = max(slider_min, min(current_low, slider_max))
-    current_high = max(slider_min, min(current_high, slider_max))
-
-    if current_low >= current_high:
-        current_low, current_high = default_y_min, default_y_max
-
-    # ステップ幅（雑に 200 分割くらい）
-    step = (slider_max - slider_min) / 200.0
-    if step <= 0:
-        step = 0.1
-
-    y_min, y_max = st.slider(
-        "Price Range (Y-axis Zoom)",
-        min_value=float(slider_min),
-        max_value=float(slider_max),
-        value=(float(current_low), float(current_high)),
-        step=float(step),
-        format="%.2f",
-        key="y_range",  # session_stateと同じ名前で自動同期
-    )
-
-    # Note: key="y_range" により自動的に st.session_state["y_range"] と同期される
-
-    # ====== Plotly チャート描画 ======
+def render_chart(df: pd.DataFrame, ma_periods: List[int]) -> go.Figure:
+    """
+    Render interactive Plotly candlestick chart with custom MA lines
+    
+    Args:
+        df: DataFrame with OHLCV data and 'time' column
+        ma_periods: List of MA periods to display
+        
+    Returns:
+        Plotly Figure object
+    """
+    # Safety checks
+    if df is None or df.empty:
+        fig = go.Figure()
+        fig.add_annotation(
+            text="No data available",
+            xref="paper", yref="paper",
+            x=0.5, y=0.5, showarrow=False
+        )
+        return fig
+    
+    # Ensure required columns exist
+    required_cols = ['time', 'open', 'high', 'low', 'close']
+    if not all(col in df.columns for col in required_cols):
+        fig = go.Figure()
+        fig.add_annotation(
+            text="Invalid data format",
+            xref="paper", yref="paper",
+            x=0.5, y=0.5, showarrow=False
+        )
+        return fig
+    
+    # Create figure
     fig = go.Figure()
-
-    # Close price
-    fig.add_trace(
-        go.Scatter(
-            x=df["time"],
-            y=df["close"],
-            mode="lines",
-            name="Close",
-            line=dict(width=2),
-        )
-    )
-
-    # 短期 MA
-    if show_short_ma and df["shortMA"].notna().any():
-        fig.add_trace(
-            go.Scatter(
-                x=df["time"],
-                y=df["shortMA"],
-                mode="lines",
-                name="Short MA",
-                line=dict(width=1.5, dash="dot"),
-            )
-        )
-
-    # 長期 MA
-    if show_long_ma and df["longMA"].notna().any():
-        fig.add_trace(
-            go.Scatter(
-                x=df["time"],
-                y=df["longMA"],
-                mode="lines",
-                name="Long MA",
-                line=dict(width=1.5, dash="dash"),
-            )
-        )
-
-    # Y軸レンジをスライダーと完全同期
-    fig.update_yaxes(range=[y_min, y_max], title_text="Price")
-    fig.update_xaxes(title_text="Time")
-
+    
+    # Add candlestick chart
+    fig.add_trace(go.Candlestick(
+        x=df['time'],
+        open=df['open'],
+        high=df['high'],
+        low=df['low'],
+        close=df['close'],
+        name='Price',
+        increasing_line_color='#26a69a',
+        decreasing_line_color='#ef5350'
+    ))
+    
+    # MA color palette
+    ma_colors = [
+        '#2196F3',  # Blue
+        '#FF9800',  # Orange
+        '#4CAF50',  # Green
+        '#9C27B0',  # Purple
+        '#F44336',  # Red
+        '#00BCD4',  # Cyan
+        '#FFEB3B',  # Yellow
+        '#795548',  # Brown
+        '#607D8B',  # Blue Grey
+        '#E91E63',  # Pink
+    ]
+    
+    # Add MA lines
+    for i, period in enumerate(ma_periods):
+        # Skip if period is larger than data length
+        if period > len(df):
+            continue
+        
+        # Calculate MA
+        ma_values = calculate_sma(df['close'], period)
+        
+        # Skip if MA is all NaN
+        if ma_values.isna().all():
+            continue
+        
+        # Get color (cycle through palette)
+        color = ma_colors[i % len(ma_colors)]
+        
+        # Add MA trace
+        fig.add_trace(go.Scatter(
+            x=df['time'],
+            y=ma_values,
+            mode='lines',
+            name=f'MA{period}',
+            line=dict(color=color, width=1),
+            hovertemplate=f'<b>MA{period}</b><br>%{{y:.2f}}<br>%{{x}}<extra></extra>'
+        ))
+    
+    # Update layout
     fig.update_layout(
-        margin=dict(l=40, r=20, t=30, b=40),
-        height=420,
-        showlegend=True,
+        title="Price Chart with Moving Averages",
+        xaxis_title="Time",
+        yaxis_title="Price",
+        hovermode='x unified',
+        height=500,
+        margin=dict(l=50, r=50, t=50, b=50),
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="right",
+            x=1
+        ),
+        xaxis_rangeslider_visible=False
     )
-
-    st.plotly_chart(fig, use_container_width=True)
-
-    # ====== 下のメトリクス類 ======
-    cols = st.columns(4)
-
-    if "stats" in data:
-        stats = data["stats"]
-        cols[0].metric("Trades", stats.get("tradeCount", 0))
-        cols[1].metric("Win Rate", f"{stats.get('winRate', 0):.1f}%")
-        cols[2].metric("Total P&L", f"{stats.get('pnlPercent', 0):.2f}%")
-
-    if not df.empty:
-        latest_close = df["close"].iloc[-1]
-        prev_close = df["close"].iloc[-2] if len(df) > 1 else latest_close
-        change = ((latest_close - prev_close) / prev_close * 100) if prev_close else 0
-        cols[3].metric("Latest Close", f"${latest_close:.2f}", f"{change:+.2f}%")
-
+    
+    return fig
 
 
 def render_signal_and_orders(symbol: str, timeframe: str, quantity: int):
@@ -566,7 +528,7 @@ def main():
     st.caption("Real-time monitoring and control for paper trading system")
     
     # Sidebar
-    symbol, timeframe, limit, quantity, refresh = render_sidebar()
+    symbol, timeframe, limit, quantity, selected_ma, refresh = render_sidebar()
     
     # Store in session state
     if "symbol" not in st.session_state or refresh:
@@ -579,8 +541,37 @@ def main():
     
     with col_left:
         # Chart
+        st.subheader("📈 Price Chart")
+        
         if st.session_state.get("chart_data"):
-            render_chart(st.session_state.chart_data)
+            data = st.session_state.chart_data
+            candles = data.get("candles", [])
+            
+            if candles:
+                # Convert to DataFrame
+                df = pd.DataFrame(candles)
+                df["time"] = pd.to_datetime(df["time"], unit="s")
+                
+                # Render chart with selected MA periods
+                fig = render_chart(df, selected_ma)
+                st.plotly_chart(fig, use_container_width=True)
+                
+                # Display stats
+                cols = st.columns(4)
+                if "stats" in data:
+                    stats = data["stats"]
+                    cols[0].metric("Trades", stats.get("tradeCount", 0))
+                    cols[1].metric("Win Rate", f"{stats.get('winRate', 0):.1f}%")
+                    cols[2].metric("Total P&L", f"{stats.get('pnlPercent', 0):.2f}%")
+                
+                # Latest price
+                if not df.empty:
+                    latest_close = df["close"].iloc[-1]
+                    prev_close = df["close"].iloc[-2] if len(df) > 1 else latest_close
+                    change = ((latest_close - prev_close) / prev_close * 100) if prev_close else 0
+                    cols[3].metric("Latest Close", f"${latest_close:.2f}", f"{change:+.2f}%")
+            else:
+                st.warning("No candle data available")
         else:
             st.warning("No chart data available. Click 'Refresh Data' to load.")
     

@@ -21,6 +21,13 @@ from backend.models.responses import (
     TradesResponse,
     PnLResponse,
 )
+from backend.models.backtest import (
+    BacktestRequest,
+    BacktestResponse,
+    BacktestMetrics,
+    BacktestTrade,
+    EquityPoint,
+)
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -56,9 +63,9 @@ def health_check():
 
 @app.get("/api/chart-data", response_model=ChartDataResponse)
 def get_chart_data(
-    symbol: str = Query(..., description="Crypto pair like BTC/USDT or stock like AAPL, 7203.T"),
+    symbol: str = Query(..., description="Symbol to fetch (crypto: BTC/USDT, stock: AAPL)"),
     timeframe: str = Query("1m", description="1m,5m,15m,30m,1h,4h,1d"),
-    limit: int = Query(200, ge=50, le=1000),
+    limit: int = Query(500, ge=50, le=3000, description="Number of candles (max 3000)"),
     short_window: int = Query(9, ge=1),
     long_window: int = Query(21, ge=2),
     tp_ratio: float = Query(0.01, gt=0),
@@ -315,3 +322,93 @@ def root():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
+
+
+# ===== Backtest Simulation Endpoint =====
+
+@app.post("/simulate", response_model=BacktestResponse)
+def simulate_backtest(request: BacktestRequest):
+    """
+    Run backtest simulation with specified strategy
+    
+    This endpoint simulates trading strategy performance on historical data.
+    Supports various strategies through the strategy parameter.
+    
+    Args:
+        request: BacktestRequest with simulation parameters
+        
+    Returns:
+        BacktestResponse with metrics, trades, and equity curve
+    """
+    from backend.backtester import BacktestEngine
+    from backend.strategies.ma_cross import MACrossStrategy
+    import pandas as pd
+    
+    # Fetch historical data
+    candles = fetch_chart_data(
+        request.symbol,
+        request.timeframe,
+        limit=3000  # Maximum data for backtest
+    )
+    
+    if not candles or len(candles) < 100:
+        raise HTTPException(
+            status_code=400,
+            detail="Insufficient historical data for backtest"
+        )
+    
+    # Convert to DataFrame
+    df = pd.DataFrame(candles)
+    df['datetime'] = pd.to_datetime(df['time'], unit='s')
+    df.set_index('datetime', inplace=True)
+    
+    # Filter by date range if specified
+    if request.start_date:
+        df = df[df.index >= pd.to_datetime(request.start_date)]
+    if request.end_date:
+        df = df[df.index <= pd.to_datetime(request.end_date)]
+    
+    if df.empty:
+        raise HTTPException(
+            status_code=400,
+            detail="No data in specified date range"
+        )
+    
+    # Initialize strategy
+    if request.strategy == "ma_cross":
+        strategy = MACrossStrategy(
+            short_window=request.short_window,
+            long_window=request.long_window
+        )
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown strategy: {request.strategy}"
+        )
+    
+    # Initialize backtest engine
+    engine = BacktestEngine(
+        initial_capital=request.initial_capital,
+        commission=request.commission,
+        position_size=request.position_size
+    )
+    
+    # Run simulation
+    try:
+        results = engine.run(df, strategy)
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Backtest simulation failed: {str(e)}"
+        )
+    
+    # Format response
+    return BacktestResponse(
+        symbol=request.symbol,
+        timeframe=request.timeframe,
+        strategy=results['strategy'],
+        metrics=BacktestMetrics(**results['metrics']),
+        trades=[BacktestTrade(**t) for t in results['trades']],
+        equity_curve=[EquityPoint(**e) for e in results['equity_curve']],
+        data_points=len(df)
+    )

@@ -1,0 +1,18 @@
+.equity-chart {
+    background: #1a1a2e;
+    border-radius: 12px;
+    padding: 2rem;
+    margin-bottom: 2rem;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+}
+
+.equity-chart h3 {
+    margin: 0 0 1.5rem 0;
+    color: #fff;
+    font-size: 1.25rem;
+}
+
+.chart-container {
+    width: 100%;
+    min-height: 400px;
+}
