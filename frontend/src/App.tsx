@@ -6,8 +6,10 @@ import {
     BacktestResponse,
     BacktestExperiment,
     BacktestExperimentSummary,
+    OptimizationRequest,
     runBacktest,
     runExperiment,
+    runOptimization,
     createExperiment,
     listExperiments,
     getExperiment,
@@ -84,6 +86,7 @@ function App() {
         null,
     );
     const [optLoading, setOptLoading] = useState(false);
+    const [optError, setOptError] = useState<string | null>(null);
 
     // Experimentsタブを開いたら一覧更新
     useEffect(() => {
@@ -158,48 +161,54 @@ function App() {
         }
     }
 
-    // Optimization 実行
     async function handleRunOptimization() {
         setOptLoading(true);
-        setError(null);
+        setOptError(null);
         setOptResults(null);
 
         try {
-            const rows: MAOptimizationRow[] = [];
+            // Call backend /optimize endpoint instead of frontend grid search
+            const optimizationRequest: OptimizationRequest = {
+                symbol: request.symbol,
+                timeframe: request.timeframe || '1d',
+                strategy_type: 'ma_cross',
+                short_window_min: optConfig.shortMin,
+                short_window_max: optConfig.shortMax,
+                short_window_step: optConfig.shortStep,
+                long_window_min: optConfig.longMin,
+                long_window_max: optConfig.longMax,
+                long_window_step: optConfig.longStep,
+                metric: 'total_return',  // Can be made configurable
+                initial_capital: request.initial_capital,
+                commission_rate: request.commission,
+                position_size: request.position_size,
+                top_n: optConfig.topN,
+            };
 
-            for (
-                let sw = optConfig.shortMin;
-                sw <= optConfig.shortMax;
-                sw += optConfig.shortStep
-            ) {
-                for (
-                    let lw = optConfig.longMin;
-                    lw <= optConfig.longMax;
-                    lw += optConfig.longStep
-                ) {
-                    if (sw >= lw) continue;
+            const response = await runOptimization(optimizationRequest);
 
-                    const res = await runBacktest({
-                        ...request,
-                        short_window: sw,
-                        long_window: lw,
-                    });
-
-                    rows.push({
-                        short_window: sw,
-                        long_window: lw,
-                        metrics: res.metrics,
-                    });
+            // Transform backend response to frontend format
+            const transformedResults: MAOptimizationRow[] = response.top_results.map(result => ({
+                short_window: result.params.short_window,
+                long_window: result.params.long_window,
+                metrics: {
+                    initial_capital: request.initial_capital || 1000000,
+                    final_equity: (request.initial_capital || 1000000) + result.metrics.total_pnl,
+                    total_pnl: result.metrics.total_pnl,
+                    return_pct: result.metrics.return_pct,
+                    max_drawdown: result.metrics.max_drawdown,
+                    win_rate: result.metrics.win_rate,
+                    trade_count: result.metrics.trade_count,
+                    winning_trades: 0,  // Not provided by backend
+                    losing_trades: 0,   // Not provided by backend
+                    sharpe_ratio: result.metrics.sharpe_ratio,
                 }
-            }
+            }));
 
-            rows.sort((a, b) => b.metrics.total_pnl - a.metrics.total_pnl);
-
-            const top = rows.slice(0, optConfig.topN);
-            setOptResults(top);
+            setOptResults(transformedResults);
         } catch (e: any) {
             console.error(e);
-            setError(e.message ?? 'Optimization failed');
+            setOptError(e.message ?? 'Failed to run optimization');
         } finally {
             setOptLoading(false);
         }
@@ -776,6 +785,10 @@ function App() {
                                             ? 'Running grid search...'
                                             : '🔍 Run MA Grid Search'}
                                     </button>
+
+                                    {optError && (
+                                        <p className="text-red-400 text-sm mt-2">⚠ {optError}</p>
+                                    )}
                                 </div>
 
                                 <div className="bg-slate-950/60 rounded-xl p-4 border border-slate-800/80">

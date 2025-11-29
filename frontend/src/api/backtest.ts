@@ -233,14 +233,90 @@ export async function runExperiment(
 }
 
 // ======================
-// ヘルパー（任意）
+// Optimization API
+// ======================
+
+export interface OptimizationRequest {
+    symbol: string;
+    timeframe?: string;
+    strategy_type?: string;
+    short_window_min: number;
+    short_window_max: number;
+    short_window_step: number;
+    long_window_min: number;
+    long_window_max: number;
+    long_window_step: number;
+    metric?: 'total_return' | 'sharpe';
+    initial_capital?: number;
+    commission_rate?: number;
+    position_size?: number;
+    top_n?: number;
+}
+
+export interface OptimizationResultParams {
+    short_window: number;
+    long_window: number;
+}
+
+export interface OptimizationResultMetrics {
+    total_pnl: number;
+    return_pct: number;
+    sharpe_ratio?: number;
+    max_drawdown: number;
+    win_rate: number;
+    trade_count: number;
+}
+
+export interface OptimizationResult {
+    rank: number;
+    params: OptimizationResultParams;
+    metrics: OptimizationResultMetrics;
+}
+
+export interface OptimizationResponse {
+    symbol: string;
+    timeframe: string;
+    strategy_type: string;
+    total_combinations: number;
+    top_results: OptimizationResult[];
+}
+
+export async function runOptimization(
+    request: OptimizationRequest
+): Promise<OptimizationResponse> {
+    const response = await fetch(`${API_BASE}/optimize`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(request),
+    });
+
+    if (!response.ok) {
+        let detail = response.statusText;
+        try {
+            const err = await response.json();
+            if (err?.detail) detail = err.detail;
+        } catch {
+            // ignore
+        }
+        throw new Error(detail || 'Optimization failed');
+    }
+
+    return response.json();
+}
+
+// ======================
+// Default factory
 // ======================
 
 export function createDefaultBacktestRequest(symbol: string): BacktestRequest {
     return {
         symbol,
         timeframe: '1d',
-        initial_capital: 1_000_000,
+        start_date: '2020-01-01',  // Fixed: yyyy-MM-dd format
+        end_date: '2022-12-31',    // Fixed: yyyy-MM-dd format
+        initial_capital: 1000000,
         commission: 0.001,
         position_size: 1.0,
         short_window: 9,

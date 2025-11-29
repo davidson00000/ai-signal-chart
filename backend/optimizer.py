@@ -3,7 +3,7 @@ Parameter Optimization Module
 Grid Search and Bayesian Optimization for Trading Strategies
 """
 from typing import Dict, List, Any, Optional
-from dataclasses import dataclass, as_dict
+from dataclasses import dataclass, asdict
 import itertools
 import pandas as pd
 
@@ -143,15 +143,18 @@ class GridSearchOptimizer:
                 
                 backtest_result = engine.run_backtest(df, strategy)
                 
+                # Extract stats from result
+                stats = backtest_result.get("stats", {})
+                
                 # Store result
                 results.append(OptimizationResult(
                     params=params,
-                    total_pnl=backtest_result["total_pnl"],
-                    return_pct=backtest_result["return_pct"],
-                    sharpe_ratio=backtest_result.get("sharpe_ratio", 0.0),
-                    max_drawdown=backtest_result["max_drawdown"],
-                    win_rate=backtest_result["win_rate"],
-                    trade_count=backtest_result["trade_count"]
+                    total_pnl=stats.get("total_pnl", 0.0),
+                    return_pct=stats.get("return_pct", 0.0),
+                    sharpe_ratio=stats.get("sharpe_ratio", 0.0),
+                    max_drawdown=stats.get("max_drawdown", 0.0),
+                    win_rate=stats.get("win_rate", 0.0),
+                    trade_count=stats.get("trade_count", 0)
                 ))
                 
             except Exception as e:
