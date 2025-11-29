@@ -12,8 +12,7 @@ export default function EquityChart({ data }: EquityChartProps) {
         date: new Date(point.date).toLocaleDateString('ja-JP', { month: 'short', day: 'numeric' }),
         fullDate: point.date,
         equity: Math.round(point.equity),
-        cash: Math.round(point.cash),
-        positionValue: Math.round(point.position_value),
+        cash: point.cash !== undefined ? Math.round(point.cash) : 0,
     }));
 
     // Sample data to reduce chart complexity

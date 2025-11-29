@@ -58,7 +58,7 @@ export default function TradesTable({ trades }: TradesTableProps) {
                                         <span className="na">-</span>
                                     )}
                                 </td>
-                                <td>{formatCurrency(trade.cash_after)}</td>
+                                <td>{trade.cash_after !== undefined ? formatCurrency(trade.cash_after) : '-'}</td>
                             </tr>
                         ))}
                     </tbody>

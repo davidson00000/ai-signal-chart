@@ -81,11 +81,11 @@ def df_to_candles(df, limit: int) -> List[Dict[str, Any]]:
         candles.append(
             {
                 "time": int(ts.timestamp()),  # Unix timestamp in seconds
-                "open": float(row["Open"]),
-                "high": float(row["High"]),
-                "low": float(row["Low"]),
-                "close": float(row["Close"]),
-                "volume": float(row.get("Volume", 0.0)),
+                "open": row["Open"].item() if hasattr(row["Open"], 'item') else float(row["Open"]),
+                "high": row["High"].item() if hasattr(row["High"], 'item') else float(row["High"]),
+                "low": row["Low"].item() if hasattr(row["Low"], 'item') else float(row["Low"]),
+                "close": row["Close"].item() if hasattr(row["Close"], 'item') else float(row["Close"]),
+                "volume": row.get("Volume", 0.0).item() if hasattr(row.get("Volume", 0.0), 'item') else float(row.get("Volume", 0.0)),
             }
         )
     return candles
@@ -310,3 +310,28 @@ def get_latest_price(symbol: str, timeframe: str = "1m") -> float:
             status_code=500,
             detail=f"Failed to fetch latest price for {symbol}: {e}"
         )
+
+def get_historical_candles(
+    symbol: str,
+    timeframe: str,
+    limit: int = 500,
+):
+    """
+    Backtester 用の公式データ取得関数。
+    main.py がこの名前の関数を import するので必須。
+
+    実体は get_chart_data のラッパー。
+    将来の仕様変更に強く、互換性を保つためのアダプター関数。
+    """
+    # get_chart_data がすでに crypto / stock を自動判定して返す
+    candles = get_chart_data(
+        symbol=symbol,
+        timeframe=timeframe,
+        limit=limit,
+    )
+
+    # timestamp を ISO8601 文字列に変換（BacktestEngine 要件）
+    for c in candles:
+        c["timestamp"] = datetime.utcfromtimestamp(c["time"]).isoformat() + "Z"
+
+    return candles

@@ -1,244 +1,218 @@
-# backend/backtester.py
-from __future__ import annotations
+"""
+Backtest Engine - Core backtesting logic
+"""
 
-from typing import Any, Dict, List
-
-import numpy as np
 import pandas as pd
+import numpy as np
+from typing import List, Dict, Any
 
-from .strategies.base import BaseStrategy
+from backend.strategies.base import BaseStrategy
 
 
 class BacktestEngine:
     """
-    シンプルなフルイン・フルアウト型バックテストエンジン。
+    シンプルなバックテストエンジン。
 
-    tests/test_backtester.py が期待している動作：
-    - metrics に以下が含まれる：
-        * initial_capital
-        * final_equity
-        * total_pnl
-        * return_pct
-        * max_drawdown
-        * win_rate
-        * trade_count
-        * winning_trades
-        * losing_trades
+    戦略からシグナルを受け取り、売買をシミュレートして損益を計算する。
     """
 
     def __init__(
         self,
-        initial_capital: float = 1_000_000.0,
-        commission: float = 0.0005,
+        initial_capital: float,
         position_size: float = 1.0,
-    ) -> None:
-        self.initial_capital = float(initial_capital)
-        self.commission = float(commission)
-        self.position_size = float(position_size)
-
-        self._reset()
-
-    # ---- internal state ----
-    def _reset(self) -> None:
-        self.cash: float = self.initial_capital
-        self.position: int = 0  # 保有株数
-        self.equity: float = self.initial_capital
-        self.trades: List[Dict[str, Any]] = []
-        self.equity_curve: List[Dict[str, Any]] = []
-        self._entry_price: float | None = None
-
-    # ---- main entry ----
-    def run(self, df: pd.DataFrame, strategy: BaseStrategy) -> Dict[str, Any]:
+        commission_rate: float = 0.0,
+        lot_size: float = 1.0,
+    ):
         """
-        Run backtest simulation
+        Initialize BacktestEngine.
+
+        Args:
+            initial_capital: Starting capital
+            position_size: Position size multiplier (0.0-1.0)
+            commission_rate: Commission rate per trade (e.g., 0.001 = 0.1%)
+            lot_size: Lot size for position calculation
         """
-        # 戦略側のバリデーション
-        strategy.validate_dataframe(df)
+        self.initial_capital = initial_capital
+        self.position_size = position_size
+        self.commission_rate = commission_rate
+        self.lot_size = lot_size
 
-        # 状態リセット
-        self._reset()
+    def _iso(self, ts) -> str:
+        """Convert timestamp to ISO8601 string."""
+        if hasattr(ts, 'tzinfo'):
+            if ts.tzinfo is None:
+                ts = ts.tz_localize("UTC")
+        return ts.isoformat().replace("+00:00", "Z")
 
-        # シグナル生成（Series 想定）
-        signals = strategy.generate_signals(df)
-        if not isinstance(signals, pd.Series):
-            raise ValueError("Strategy.generate_signals must return a pandas Series.")
+    def run_backtest(self, candles: pd.DataFrame, strategy: BaseStrategy) -> Dict[str, Any]:
+        """
+        Run backtest with given candles and strategy.
 
-        # 日毎ループ
-        for date, row in df.iterrows():
+        Args:
+            candles: DataFrame with OHLCV data (must have 'close' column)
+            strategy: Strategy instance that implements generate_signals()
+
+        Returns:
+            Dict containing:
+                - equity_curve: List[Dict] with timestamp and equity
+                - trades: List[Dict] with trade details
+                - stats: Dict with performance metrics
+        """
+        # 1. Generate signals from strategy
+        signals = strategy.generate_signals(candles)
+
+        # 2. Initialize state
+        cash = self.initial_capital
+        position = 0
+        entry_price = 0.0
+
+        trades: List[Dict] = []
+        equity_curve: List[Dict] = []
+
+        # 3. Iterate through candles
+        for idx, (ts, row) in enumerate(candles.iterrows()):
             price = float(row["close"])
-            signal = int(signals.loc[date])
+            signal = int(signals.iloc[idx]) if idx < len(signals) else 0
 
-            # トレード前のマークトゥマーケット
-            self.equity = self.cash + self.position * price
+            # Buy signal (1) and no position
+            if signal == 1 and position == 0:
+                # Calculate quantity to buy
+                qty = (cash * self.position_size) // price
+                if qty > 0:
+                    cost = qty * price
+                    commission = cost * self.commission_rate
 
-            # シグナルに応じた売買
-            # signal: 1 → ロング、0 → ノーポジ
-            if signal == 1 and self.position == 0:
-                self._execute_buy(date, price)
-            elif signal == 0 and self.position > 0:
-                self._execute_sell(date, price)
+                    cash -= (cost + commission)
+                    position = qty
+                    entry_price = price
 
-            # トレード後のエクイティ
-            self.equity = self.cash + self.position * price
-            self.equity_curve.append(
-                {
-                    "date": date,
-                    "equity": self.equity,
-                    "cash": self.cash,
-                    "position_value": self.position * price,
-                }
-            )
+                    trades.append({
+                        "date": self._iso(ts),
+                        "side": "BUY",
+                        "price": price,
+                        "quantity": qty,
+                        "commission": commission,
+                        "pnl": None,
+                        "cash_after": cash,
+                    })
 
-        # 期末にポジションが残っていたら、最後の価格でクローズ
-        if self.position > 0:
-            last_date = df.index[-1]
-            last_price = float(df.iloc[-1]["close"])
-            self._execute_sell(last_date, last_price)
+            # Sell signal (0 or -1) and have position
+            elif signal <= 0 and position > 0:
+                qty = position
+                revenue = qty * price
+                commission = revenue * self.commission_rate
 
-            # 最後の equity_curve を更新（ノーポジ状態に）
-            self.equity = self.cash
-            if self.equity_curve:
-                self.equity_curve[-1].update(
-                    {
-                        "equity": self.equity,
-                        "cash": self.cash,
-                        "position_value": 0.0,
-                    }
-                )
+                # Calculate PnL
+                pnl = revenue - commission - (qty * entry_price)
 
-        metrics = self._calculate_metrics()
+                cash += (revenue - commission)
+                position = 0
 
-        return {
-            "strategy": str(strategy),
-            "metrics": metrics,
-            "trades": self.trades,
-            "equity_curve": self.equity_curve,
-        }
+                trades.append({
+                    "date": self._iso(ts),
+                    "side": "SELL",
+                    "price": price,
+                    "quantity": qty,
+                    "commission": commission,
+                    "pnl": pnl,
+                    "cash_after": cash,
+                })
 
-    # ---- order execution ----
-    def _execute_buy(self, date: pd.Timestamp, price: float) -> None:
-        # 資金の position_size 割合でフルイン
-        max_shares = int((self.cash * self.position_size) // price)
-        if max_shares <= 0:
-            return
+            # Record equity
+            equity = cash + position * price
+            equity_curve.append({
+                "date": self._iso(ts),
+                "equity": equity,
+                "cash": cash,
+            })
 
-        cost = max_shares * price
-        commission = cost * self.commission
-        total_cost = cost + commission
+        # 4. Force close position at end if still open
+        if position > 0:
+            ts = candles.index[-1]
+            price = float(candles.iloc[-1]["close"])
 
-        self.cash -= total_cost
-        self.position += max_shares
-        self._entry_price = price
+            qty = position
+            revenue = qty * price
+            commission = revenue * self.commission_rate
+            pnl = revenue - commission - (qty * entry_price)
 
-        self.trades.append(
-            {
-                "date": date,
-                "side": "BUY",
-                "price": price,
-                "quantity": max_shares,
-                "commission": commission,
-                "cash_after": self.cash,
-                "position": self.position,
-                "pnl": 0.0,
-            }
-        )
+            cash += (revenue - commission)
+            position = 0
 
-    def _execute_sell(self, date: pd.Timestamp, price: float) -> None:
-        if self.position <= 0:
-            return
-
-        shares = self.position
-        proceeds = shares * price
-        commission = proceeds * self.commission
-        net_proceeds = proceeds - commission
-
-        self.cash += net_proceeds
-
-        entry_price = self._entry_price if self._entry_price is not None else price
-        trade_pnl = (price - entry_price) * shares - commission
-
-        self.position = 0
-        self._entry_price = None
-
-        self.trades.append(
-            {
-                "date": date,
+            trades.append({
+                "date": self._iso(ts),
                 "side": "SELL",
                 "price": price,
-                "quantity": shares,
+                "quantity": qty,
                 "commission": commission,
-                "cash_after": self.cash,
-                "position": self.position,
-                "pnl": trade_pnl,
-            }
-        )
+                "pnl": pnl,
+                "cash_after": cash,
+            })
 
-    # ---- metrics ----
-    def _calculate_metrics(self) -> Dict[str, Any]:
-        if self.equity_curve:
-            final_equity = float(self.equity_curve[-1]["equity"])
-        else:
-            final_equity = self.initial_capital
+            # Update final equity point
+            equity_curve.append({
+                "date": self._iso(ts),
+                "equity": cash,
+                "cash": cash,
+            })
 
+        # 5. Calculate statistics
+        final_equity = cash
         total_pnl = final_equity - self.initial_capital
-        return_pct = (
-            (total_pnl / self.initial_capital) * 100.0 if self.initial_capital else 0.0
-        )
+        return_pct = (total_pnl / self.initial_capital) * 100
 
-        max_dd = self._calculate_max_drawdown()
-        trade_stats = self._calculate_trade_stats()
+        # Calculate trade statistics
+        winning_trades = [t for t in trades if t.get("pnl") is not None and t["pnl"] > 0]
+        losing_trades = [t for t in trades if t.get("pnl") is not None and t["pnl"] < 0]
+        completed_trades = [t for t in trades if t.get("pnl") is not None]
 
-        metrics: Dict[str, Any] = {
+        trade_count = len(completed_trades)
+        win_count = len(winning_trades)
+        lose_count = len(losing_trades)
+        win_rate = (win_count / trade_count) if trade_count > 0 else 0.0
+
+        # Calculate max drawdown
+        max_drawdown = 0.0
+        peak = self.initial_capital
+        for point in equity_curve:
+            equity = point["equity"]
+            if equity > peak:
+                peak = equity
+            drawdown = (peak - equity) / peak if peak > 0 else 0.0
+            if drawdown > max_drawdown:
+                max_drawdown = drawdown
+
+        # Calculate Sharpe ratio (simplified)
+        sharpe_ratio = None
+        if len(equity_curve) > 1:
+            returns = []
+            for i in range(1, len(equity_curve)):
+                prev_equity = equity_curve[i - 1]["equity"]
+                curr_equity = equity_curve[i]["equity"]
+                ret = (curr_equity - prev_equity) / prev_equity if prev_equity > 0 else 0.0
+                returns.append(ret)
+
+            if len(returns) > 0:
+                mean_return = np.mean(returns)
+                std_return = np.std(returns)
+                if std_return > 0:
+                    sharpe_ratio = (mean_return / std_return) * np.sqrt(252)  # Annualized
+
+        stats = {
             "initial_capital": self.initial_capital,
             "final_equity": final_equity,
             "total_pnl": total_pnl,
             "return_pct": return_pct,
-            "max_drawdown": max_dd,
+            "trade_count": trade_count,
+            "winning_trades": win_count,
+            "losing_trades": lose_count,
+            "win_rate": win_rate,
+            "max_drawdown": max_drawdown,
+            "sharpe_ratio": sharpe_ratio,
         }
-        metrics.update(trade_stats)
-        return metrics
-
-    def _calculate_max_drawdown(self) -> float:
-        if not self.equity_curve:
-            return 0.0
-
-        equity_series = np.array(
-            [point["equity"] for point in self.equity_curve], dtype=float
-        )
-        peaks = np.maximum.accumulate(equity_series)
-        drawdowns = (equity_series - peaks) / peaks  # 負の値
-
-        if len(drawdowns) == 0:
-            return 0.0
-
-        return float(drawdowns.min()) * 100.0  # ％表示
-
-    def _calculate_trade_stats(self) -> Dict[str, Any]:
-        """
-        勝率計算と、勝ち負け・トレード数の集計。
-        - trade_count: 決済トレード数（SELL の数）
-        - winning_trades: pnl > 0 の SELL 数
-        - losing_trades: pnl <= 0 の SELL 数
-        - win_rate: winning_trades / trade_count * 100
-        """
-        sells = [t for t in self.trades if t["side"] == "SELL"]
-        trade_count = len(sells)
-
-        if trade_count == 0:
-            return {
-                "win_rate": 0.0,
-                "trade_count": 0,
-                "winning_trades": 0,
-                "losing_trades": 0,
-            }
-
-        winning_trades = sum(1 for t in sells if t["pnl"] > 0)
-        losing_trades = trade_count - winning_trades
-        win_rate = (winning_trades / trade_count) * 100.0
 
         return {
-            "win_rate": win_rate,
-            "trade_count": trade_count,
-            "winning_trades": winning_trades,
-            "losing_trades": losing_trades,
+            "equity_curve": equity_curve,
+            "trades": trades,
+            "stats": stats,
         }

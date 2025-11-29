@@ -1,414 +1,146 @@
 """
-EXITON Backend - Main FastAPI Application
+FastAPI Backend for AI Signal Chart Backtest System
 """
-from fastapi import FastAPI, Query, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
-from datetime import datetime
-from typing import Optional
 
-from backend.data_feed import get_chart_data as fetch_chart_data, get_latest_price
-from backend.strategy import generate_signals_and_trades, generate_signal
-from backend.paper_trade import PaperTrader
-from backend.models.requests import PaperOrderRequest
-from backend.models.responses import (
-    HealthResponse,
-    ChartDataResponse,
-    SignalResponse,
-    OrderResponse,
-    PositionsResponse,
-    TradesResponse,
-    PnLResponse,
-)
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from typing import List
+import pandas as pd
+
+from backend.data_feed import get_chart_data
+from backend.backtester import BacktestEngine
+from backend.strategies.ma_cross import MACrossStrategy
 from backend.models.backtest import (
     BacktestRequest,
     BacktestResponse,
-    BacktestMetrics,
-    BacktestTrade,
-    EquityPoint,
+    BacktestStats,
+    EquityCurvePoint,
+    TradeSummary,
 )
 
-# Initialize FastAPI app
-app = FastAPI(
-    title="EXITON AI Trading System",
-    description="AI-powered automated trading system backend",
-    version="0.1.0"
-)
 
-# CORS middleware for local and Vercel deployment
+app = FastAPI(title="AI Signal Chart Backtest API", version="0.1.0")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Tighten in production
+    allow_origins=["*"],  # ローカル開発中なので一旦ゆるく
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Global paper trader instance
-trader = PaperTrader(initial_cash=100000.0)
 
+@app.get("/health")
+def health_check() -> dict:
+    """Health check endpoint."""
+    return {"status": "ok", "version": "0.1.0"}
 
-# === API Endpoints ===
-
-@app.get("/health", response_model=HealthResponse)
-def health_check():
-    """Health check endpoint"""
-    return {
-        "status": "ok",
-        "version": "0.1.0",
-        "timestamp": datetime.now().isoformat()
-    }
-
-
-@app.get("/api/chart-data", response_model=ChartDataResponse)
-def get_chart_data(
-    symbol: str = Query(..., description="Symbol to fetch (crypto: BTC/USDT, stock: AAPL)"),
-    timeframe: str = Query("1m", description="1m,5m,15m,30m,1h,4h,1d"),
-    limit: int = Query(500, ge=50, le=3000, description="Number of candles (max 3000)"),
-    short_window: int = Query(9, ge=1),
-    long_window: int = Query(21, ge=2),
-    tp_ratio: float = Query(0.01, gt=0),
-    sl_ratio: float = Query(0.005, gt=0),
-):
-    """
-    Get chart data with signals and trades
-    
-    This endpoint maintains backward compatibility with the existing frontend.
-    Response format matches the original implementation to ensure the UI works correctly.
-    """
-    # Fetch candles
-    candles = fetch_chart_data(symbol, timeframe, limit)
-    
-    # Check if we have enough data for MA calculation
-    if len(candles) < max(short_window, long_window) + 5:
-        raise HTTPException(
-            status_code=400,
-            detail="Not enough candles for MA calculation. Try smaller windows or different timeframe.",
-        )
-    
-    # Generate signals and trades using MA cross strategy
-    signal_result = generate_signals_and_trades(
-        candles,
-        short_window=short_window,
-        long_window=long_window,
-        tp_ratio=tp_ratio,
-        sl_ratio=sl_ratio,
-    )
-    
-    # Determine if crypto or stock
-    is_crypto = "/" in symbol
-    
-    # Return in frontend-compatible format
-    return {
-        "symbol": symbol,
-        "timeframe": timeframe,
-        "candles": candles,
-        "shortMA": signal_result["shortMA"],
-        "longMA": signal_result["longMA"],
-        "signals": signal_result["signals"],
-        "trades": signal_result["trades"],
-        "stats": signal_result["stats"],
-        "meta": {
-            "isCrypto": is_crypto,
-            "source": "ccxt" if is_crypto else "yfinance",
-        },
-    }
-
-
-@app.get("/signal", response_model=SignalResponse)
-def get_signal(
-    symbol: str = Query(..., description="Symbol to analyze"),
-    date: Optional[str] = Query(None, description="Date for signal (YYYY-MM-DD)"),
-    strategy: str = Query("ma_cross", description="Strategy name"),
-    timeframe: str = Query("1d", description="Timeframe"),
-    limit: int = Query(200, ge=50, le=500),
-    short_window: int = Query(9, ge=1),
-    long_window: int = Query(21, ge=2),
-    tp_ratio: float = Query(0.01, gt=0),
-    sl_ratio: float = Query(0.005, gt=0),
-):
-    """
-    Get trading signal for a symbol
-    
-    Per API_SPEC.md specification
-    """
-    # Fetch chart data
-    candles = fetch_chart_data(symbol, timeframe, limit)
-    
-    if not candles:
-        raise HTTPException(status_code=400, detail="No data available for symbol")
-    
-    # Generate signal
-    signal = generate_signal(
-        symbol=symbol,
-        candles=candles,
-        strategy=strategy,
-        date=date,
-        timeframe=timeframe,
-        short_window=short_window,
-        long_window=long_window,
-        tp_ratio=tp_ratio,
-        sl_ratio=sl_ratio,
-    )
-    
-    return signal
-
-
-@app.post("/paper-order", response_model=OrderResponse)
-def place_paper_order(
-    # JSON body (priority)
-    body: Optional[PaperOrderRequest] = None,
-    # Query parameters (fallback)
-    symbol: Optional[str] = None,
-    side: Optional[str] = None,
-    quantity: Optional[int] = None,
-    price: Optional[float] = None,
-    signal_id: Optional[str] = None,
-    order_time: Optional[str] = None,
-    mode: str = "market"
-):
-    """
-    Place a paper trading order
-    
-    Per API_SPEC.md specification
-    Now supports both JSON body and query parameters:
-    - Priority 1: JSON body (PaperOrderRequest)
-    - Priority 2: Query parameters (backward compatible)
-    
-    Automatically fetches market price when price not specified.
-    """
-    # Priority 1: Use JSON body if provided
-    if body is not None:
-        symbol = body.symbol
-        side = body.side
-        quantity = body.quantity
-        price = body.price if body.price is not None else price
-        signal_id = body.signal_id if body.signal_id is not None else signal_id
-        order_time = body.order_time if body.order_time is not None else order_time
-        mode = body.mode
-    # Priority 2: Use query parameters
-    elif symbol is None or side is None or quantity is None:
-        raise HTTPException(
-            status_code=422,
-            detail="Either provide JSON body or symbol, side, and quantity as query parameters"
-        )
-    
-    # Validate inputs
-    if side not in ["BUY", "SELL"]:
-        raise HTTPException(status_code=400, detail="side must be BUY or SELL")
-    
-    if quantity <= 0:
-        raise HTTPException(status_code=400, detail="quantity must be positive")
-    
-    # If price not provided, fetch current market price
-    if price is None:
-        try:
-            price = get_latest_price(symbol)
-        except HTTPException:
-            raise
-        except Exception as e:
-            raise HTTPException(
-                status_code=500,
-                detail=f"Failed to get market price for {symbol}: {e}"
-            )
-    
-    # Execute order via paper trader
-    result = trader.execute_order(
-        symbol=symbol,
-        side=side,
-        quantity=quantity,
-        price=price,
-        signal_id=signal_id,
-        order_time=order_time,
-        mode=mode
-    )
-    
-    return result
-
-
-@app.get("/positions", response_model=PositionsResponse)
-def get_positions():
-    """
-    Get current positions with real-time pricing
-    
-    Per API_SPEC.md specification
-    Now calculates unrealized P&L using current market prices
-    """
-    # Get positions with current prices and unrealized P&L
-    positions = trader.get_positions(price_lookup_fn=get_latest_price)
-    
-    # Calculate total unrealized P&L
-    total_unrealized = sum(
-        p.get("unrealized_pnl", 0.0) 
-        for p in positions 
-        if p.get("unrealized_pnl") is not None
-    )
-    
-    return {
-        "positions": positions,
-        "total_unrealized_pnl": total_unrealized
-    }
-
-
-@app.get("/trades", response_model=TradesResponse)
-def get_trades(
-    symbol: Optional[str] = Query(None, description="Filter by symbol"),
-    from_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
-    to_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
-    limit: int = Query(100, ge=1, le=1000, description="Maximum number of trades")
-):
-    """
-    Get trade history
-    
-    Per API_SPEC.md specification
-    """
-    trades = trader.get_trades(
-        symbol=symbol,
-        from_date=from_date,
-        to_date=to_date,
-        limit=limit
-    )
-    
-    return {"trades": trades}
-
-
-@app.get("/pnl", response_model=PnLResponse)
-def get_pnl(
-    from_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
-    to_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
-    mode: str = Query("daily", description="daily or monthly")
-):
-    """
-    Get P&L summary
-    
-    Per API_SPEC.md specification
-    
-    Note: This is a basic implementation. A full implementation would
-    calculate daily equity snapshots and track unrealized P&L over time.
-    """
-    total_pnl = trader.total_pnl()
-    equity = trader.get_equity()
-    
-    # For now, return a simple summary
-    # In production, we would track daily equity values
-    return {
-        "mode": mode,
-        "from_date": from_date,
-        "to_date": to_date,
-        "pnl": [
-            {
-                "date": datetime.now().strftime("%Y-%m-%d"),
-                "realized": total_pnl,
-                "unrealized": 0.0,
-                "equity": equity
-            }
-        ]
-    }
-
-
-# === Frontend Static Files ===
-
-# Serve frontend files
-app.mount("/frontend", StaticFiles(directory="frontend"), name="frontend")
-
-
-@app.get("/")
-def root():
-    """Serve index.html at root"""
-    return FileResponse("frontend/index.html")
-
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
-
-
-# ===== Backtest Simulation Endpoint =====
 
 @app.post("/simulate", response_model=BacktestResponse)
-def simulate_backtest(request: BacktestRequest):
+def simulate_backtest(request: BacktestRequest) -> BacktestResponse:
     """
-    Run backtest simulation with specified strategy
-    
-    This endpoint simulates trading strategy performance on historical data.
-    Supports various strategies through the strategy parameter.
-    
+    Run backtest simulation.
+
     Args:
-        request: BacktestRequest with simulation parameters
-        
+        request: BacktestRequest with symbol, timeframe, strategy parameters
+
     Returns:
-        BacktestResponse with metrics, trades, and equity curve
+        BacktestResponse with equity curve, trades, and statistics
+
+    Raises:
+        HTTPException: If data cannot be fetched or backtest fails
     """
-    from backend.backtester import BacktestEngine
-    from backend.strategies.ma_cross import MACrossStrategy
-    import pandas as pd
-    
-    # Fetch historical data
-    candles = fetch_chart_data(
-        request.symbol,
-        request.timeframe,
-        limit=3000  # Maximum data for backtest
-    )
-    
-    if not candles or len(candles) < 100:
-        raise HTTPException(
-            status_code=400,
-            detail="Insufficient historical data for backtest"
-        )
-    
-    # Convert to DataFrame
-    df = pd.DataFrame(candles)
-    df['datetime'] = pd.to_datetime(df['time'], unit='s')
-    df.set_index('datetime', inplace=True)
-    
-    # Filter by date range if specified
-    if request.start_date:
-        df = df[df.index >= pd.to_datetime(request.start_date)]
-    if request.end_date:
-        df = df[df.index <= pd.to_datetime(request.end_date)]
-    
-    if df.empty:
-        raise HTTPException(
-            status_code=400,
-            detail="No data in specified date range"
-        )
-    
-    # Initialize strategy
-    if request.strategy == "ma_cross":
-        strategy = MACrossStrategy(
-            short_window=request.short_window,
-            long_window=request.long_window
-        )
-    else:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unknown strategy: {request.strategy}"
-        )
-    
-    # Initialize backtest engine
-    engine = BacktestEngine(
-        initial_capital=request.initial_capital,
-        commission=request.commission,
-        position_size=request.position_size
-    )
-    
-    # Run simulation
     try:
-        results = engine.run(df, strategy)
+        # 1. Fetch historical market data
+        candles: List[dict] = get_chart_data(
+            symbol=request.symbol,
+            timeframe=request.timeframe,
+            start=request.start_date,
+            end=request.end_date,
+            limit=2000,
+        )
+
+        if not candles:
+            raise HTTPException(
+                status_code=400,
+                detail="No market data returned for this query.",
+            )
+
+        # 2. Convert to DataFrame and set index
+        df = pd.DataFrame(candles)
+        
+        # Ensure 'time' column exists and convert to datetime
+        if "time" not in df.columns:
+            raise HTTPException(
+                status_code=500,
+                detail="Data feed did not return 'time' column.",
+            )
+        
+        df["time"] = pd.to_datetime(df["time"])
+        df = df.set_index("time")
+
+        # Ensure 'close' column exists
+        if "close" not in df.columns:
+            raise HTTPException(
+                status_code=500,
+                detail="Data feed did not return 'close' column.",
+            )
+
+        # 3. Initialize strategy based on request
+        if request.strategy == "ma_cross":
+            strategy = MACrossStrategy(
+                short_window=request.short_window,
+                long_window=request.long_window,
+            )
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported strategy: {request.strategy}",
+            )
+
+        # 4. Initialize and run backtest engine
+        engine = BacktestEngine(
+            initial_capital=request.initial_capital,
+            commission_rate=request.commission_rate,
+            position_size=request.position_size,
+            lot_size=1.0,
+        )
+
+        result = engine.run_backtest(df, strategy)
+
+        # 5. Convert result to response models
+        equity_curve = [
+            EquityCurvePoint(**point) for point in result["equity_curve"]
+        ]
+        trades = [TradeSummary(**trade) for trade in result["trades"]]
+        stats = BacktestStats(**result["stats"])
+
+        # 6. Build and return response
+        response = BacktestResponse(
+            symbol=request.symbol,
+            timeframe=request.timeframe,
+            strategy=str(strategy),
+            equity_curve=equity_curve,
+            trades=trades,
+            metrics=stats,
+            data_points=len(df),
+        )
+
+        return response
+
+    except HTTPException:
+        # Re-raise HTTP exceptions
+        raise
     except Exception as e:
+        # Catch any other errors and return 500
         raise HTTPException(
             status_code=500,
-            detail=f"Backtest simulation failed: {str(e)}"
+            detail=f"Backtest failed: {str(e)}",
         )
-    
-    # Format response
-    return BacktestResponse(
-        symbol=request.symbol,
-        timeframe=request.timeframe,
-        strategy=results['strategy'],
-        metrics=BacktestMetrics(**results['metrics']),
-        trades=[BacktestTrade(**t) for t in results['trades']],
-        equity_curve=[EquityPoint(**e) for e in results['equity_curve']],
-        data_points=len(df)
-    )
+
+
+# `python -m backend.main` で起動できるように
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run("backend.main:app", host="0.0.0.0", port=8000, reload=False)
