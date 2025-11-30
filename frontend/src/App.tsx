@@ -9,10 +9,12 @@ import {
     OptimizationRequest,
     StrategyLabBatchRequest,
     StrategyLabSymbolResult,
+    JsonStrategyRunRequest,
     runBacktest,
     runExperiment,
     runOptimization,
     runStrategyLabBatch,
+    runJsonStrategy,
     createExperiment,
     listExperiments,
     getExperiment,
@@ -112,6 +114,39 @@ function App() {
     const [labLoading, setLabLoading] = useState(false);
     const [labError, setLabError] = useState<string | null>(null);
     const [labSymbolsInput, setLabSymbolsInput] = useState('7203.T, 6758.T, 9984.T');
+
+    // Strategy Designer (JSON)
+    const [jsonStrategyInput, setJsonStrategyInput] = useState(JSON.stringify({
+        name: "MA_RSI_LongOnly_v1",
+        description: "Price above 20MA and RSI oversold, long only",
+        indicators: [
+            { id: "ma20", type: "sma", source: "close", period: 20 },
+            { id: "rsi14", type: "rsi", source: "close", period: 14 }
+        ],
+        entry_rules: [
+            {
+                all: [
+                    { left: { ref: "close" }, op: ">", right: { ref: "ma20" } },
+                    { left: { ref: "rsi14" }, op: "<", right: { value: 30 } }
+                ]
+            }
+        ],
+        exit_rules: [
+            {
+                any: [
+                    { left: { ref: "close" }, op: "<", right: { ref: "ma20" } },
+                    { left: { ref: "rsi14" }, op: ">", right: { value: 70 } }
+                ]
+            }
+        ],
+        position: {
+            direction: "long_only",
+            max_position: 1.0
+        }
+    }, null, 2));
+    const [jsonLoading, setJsonLoading] = useState(false);
+    const [jsonError, setJsonError] = useState<string | null>(null);
+    const [jsonResult, setJsonResult] = useState<BacktestResponse | null>(null);
 
     // Experimentsタブを開いたら一覧更新
     useEffect(() => {
@@ -291,6 +326,41 @@ function App() {
         setActiveTab('backtest');
     }
 
+    // Strategy Designer Handlers
+    async function handleRunJsonStrategy() {
+        setJsonLoading(true);
+        setJsonError(null);
+        setJsonResult(null);
+
+        try {
+            let strategy;
+            try {
+                strategy = JSON.parse(jsonStrategyInput);
+            } catch (e) {
+                throw new Error("Invalid JSON format");
+            }
+
+            const req: JsonStrategyRunRequest = {
+                symbol: request.symbol, // Use symbol from Backtest tab
+                timeframe: request.timeframe || '1d',
+                start_date: request.start_date,
+                end_date: request.end_date,
+                initial_capital: request.initial_capital || 1000000,
+                commission_rate: request.commission || 0.001,
+                position_size: request.position_size || 1.0,
+                strategy: strategy
+            };
+
+            const res = await runJsonStrategy(req);
+            setJsonResult(res);
+        } catch (err: any) {
+            console.error(err);
+            setJsonError(err.message || 'JSON Strategy run failed');
+        } finally {
+            setJsonLoading(false);
+        }
+    }
+
     async function handleSaveExperiment() {
         if (!expName.trim()) {
             setError('Experiment name is required');
@@ -371,6 +441,15 @@ function App() {
                                 }`}
                         >
                             Strategy Lab
+                        </button>
+                        <button
+                            onClick={() => setActiveTab('designer' as any)}
+                            className={`px-3 py-2 border-b-2 transition-colors ${activeTab === ('designer' as any)
+                                ? 'border-emerald-400 text-emerald-300'
+                                : 'border-transparent text-slate-500 hover:text-slate-200'
+                                }`}
+                        >
+                            Designer (JSON)
                         </button>
                     </nav>
                 </div>
@@ -1360,6 +1439,163 @@ function App() {
                                             </div>
                                         </div>
                                     )}
+                                </div>
+                            </section>
+                        )}
+
+                        {/* Strategy Designer Tab */}
+                        {activeTab === ('designer' as any) && (
+                            <section className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+                                <div className="bg-slate-900/50 rounded-xl p-6 border border-slate-800 backdrop-blur-sm">
+                                    <h2 className="text-xl font-bold mb-4 flex items-center gap-2 text-emerald-400">
+                                        <span className="text-2xl">🎨</span> Strategy Designer
+                                    </h2>
+
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                                        {/* Left: JSON Editor */}
+                                        <div className="space-y-4">
+                                            <div className="flex justify-between items-center">
+                                                <label className="block text-xs font-medium text-slate-400">
+                                                    Strategy JSON
+                                                </label>
+                                                <span className="text-[10px] text-slate-500">
+                                                    Target Symbol: <span className="text-emerald-300 font-mono">{request.symbol}</span>
+                                                </span>
+                                            </div>
+                                            <textarea
+                                                value={jsonStrategyInput}
+                                                onChange={(e) => setJsonStrategyInput(e.target.value)}
+                                                className="w-full h-[500px] bg-slate-950 border border-slate-800 rounded px-3 py-2 text-xs font-mono focus:ring-2 focus:ring-emerald-500 focus:border-transparent outline-none transition-all leading-relaxed"
+                                                spellCheck={false}
+                                            />
+
+                                            <button
+                                                onClick={handleRunJsonStrategy}
+                                                disabled={jsonLoading}
+                                                className="w-full px-4 py-3 rounded-md bg-emerald-600 hover:bg-emerald-500 text-white font-bold shadow-lg shadow-emerald-900/40 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                                            >
+                                                {jsonLoading ? 'Running Strategy...' : '▶ Run JSON Strategy'}
+                                            </button>
+
+                                            {jsonError && (
+                                                <div className="p-3 bg-rose-950/30 border border-rose-900/50 rounded text-rose-300 text-xs font-mono whitespace-pre-wrap">
+                                                    ⚠ {jsonError}
+                                                </div>
+                                            )}
+                                        </div>
+
+                                        {/* Right: Results */}
+                                        <div className="space-y-6">
+                                            {jsonResult ? (
+                                                <>
+                                                    {/* Metrics */}
+                                                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                                                        <div className="bg-slate-950/50 p-3 rounded-lg border border-slate-800">
+                                                            <div className="text-slate-500 text-[10px] uppercase tracking-wider mb-1">Total Return</div>
+                                                            <div className={`text-lg font-bold ${jsonResult.metrics.total_pnl > 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                                                {percentFmt.format(jsonResult.metrics.return_pct / 100)}
+                                                            </div>
+                                                            <div className="text-xs text-slate-400">
+                                                                ¥{numberFmt.format(jsonResult.metrics.total_pnl)}
+                                                            </div>
+                                                        </div>
+                                                        <div className="bg-slate-950/50 p-3 rounded-lg border border-slate-800">
+                                                            <div className="text-slate-500 text-[10px] uppercase tracking-wider mb-1">Win Rate</div>
+                                                            <div className="text-lg font-bold text-slate-200">
+                                                                {percentFmt.format(jsonResult.metrics.win_rate)}
+                                                            </div>
+                                                            <div className="text-xs text-slate-400">
+                                                                {jsonResult.metrics.trade_count} trades
+                                                            </div>
+                                                        </div>
+                                                        <div className="bg-slate-950/50 p-3 rounded-lg border border-slate-800">
+                                                            <div className="text-slate-500 text-[10px] uppercase tracking-wider mb-1">Max Drawdown</div>
+                                                            <div className="text-lg font-bold text-rose-400">
+                                                                {percentFmt.format(jsonResult.metrics.max_drawdown)}
+                                                            </div>
+                                                        </div>
+                                                        <div className="bg-slate-950/50 p-3 rounded-lg border border-slate-800">
+                                                            <div className="text-slate-500 text-[10px] uppercase tracking-wider mb-1">Sharpe Ratio</div>
+                                                            <div className="text-lg font-bold text-sky-400">
+                                                                {jsonResult.metrics.sharpe_ratio ? jsonResult.metrics.sharpe_ratio.toFixed(2) : '-'}
+                                                            </div>
+                                                        </div>
+                                                    </div>
+
+                                                    {/* Chart */}
+                                                    <div className="h-64 bg-slate-950/50 rounded-lg border border-slate-800 p-4">
+                                                        <ResponsiveContainer width="100%" height="100%">
+                                                            <LineChart data={jsonResult.equity_curve}>
+                                                                <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                                                                <XAxis
+                                                                    dataKey="time"
+                                                                    tickFormatter={(ts) => new Date(ts * 1000).toLocaleDateString()}
+                                                                    stroke="#475569"
+                                                                    fontSize={10}
+                                                                />
+                                                                <YAxis
+                                                                    stroke="#475569"
+                                                                    fontSize={10}
+                                                                    domain={['auto', 'auto']}
+                                                                />
+                                                                <Tooltip
+                                                                    contentStyle={{ backgroundColor: '#0f172a', borderColor: '#1e293b' }}
+                                                                    labelFormatter={(ts) => new Date(ts * 1000).toLocaleDateString()}
+                                                                />
+                                                                <Line
+                                                                    type="monotone"
+                                                                    dataKey="equity"
+                                                                    stroke="#10b981"
+                                                                    strokeWidth={2}
+                                                                    dot={false}
+                                                                />
+                                                            </LineChart>
+                                                        </ResponsiveContainer>
+                                                    </div>
+
+                                                    {/* Trades (Simple List) */}
+                                                    <div className="bg-slate-950/50 rounded-lg border border-slate-800 overflow-hidden">
+                                                        <div className="px-4 py-2 border-b border-slate-800 bg-slate-900/50 text-xs font-semibold text-slate-400">
+                                                            Recent Trades
+                                                        </div>
+                                                        <div className="max-h-60 overflow-y-auto">
+                                                            <table className="w-full text-xs text-left text-slate-300">
+                                                                <thead className="text-slate-500 bg-slate-950 sticky top-0">
+                                                                    <tr>
+                                                                        <th className="px-3 py-2">Date</th>
+                                                                        <th className="px-3 py-2">Side</th>
+                                                                        <th className="px-3 py-2 text-right">Price</th>
+                                                                        <th className="px-3 py-2 text-right">P&L</th>
+                                                                    </tr>
+                                                                </thead>
+                                                                <tbody>
+                                                                    {jsonResult.trades.slice().reverse().map((t, i) => (
+                                                                        <tr key={i} className="border-b border-slate-800/50 hover:bg-slate-800/30">
+                                                                            <td className="px-3 py-1.5">{t.date?.slice(0, 10)}</td>
+                                                                            <td className="px-3 py-1.5">
+                                                                                <span className={`px-1.5 py-0.5 rounded ${t.side === 'BUY' ? 'bg-emerald-500/20 text-emerald-300' : 'bg-rose-500/20 text-rose-300'}`}>
+                                                                                    {t.side}
+                                                                                </span>
+                                                                            </td>
+                                                                            <td className="px-3 py-1.5 text-right">¥{numberFmt.format(t.price)}</td>
+                                                                            <td className={`px-3 py-1.5 text-right ${t.pnl && t.pnl > 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                                                                {t.pnl ? `¥${numberFmt.format(t.pnl)}` : '-'}
+                                                                            </td>
+                                                                        </tr>
+                                                                    ))}
+                                                                </tbody>
+                                                            </table>
+                                                        </div>
+                                                    </div>
+                                                </>
+                                            ) : (
+                                                <div className="h-full flex flex-col items-center justify-center text-slate-500 border border-slate-800 border-dashed rounded-xl p-12">
+                                                    <div className="text-4xl mb-4 opacity-20">📊</div>
+                                                    <p>Run the strategy to see results here</p>
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
                                 </div>
                             </section>
                         )}

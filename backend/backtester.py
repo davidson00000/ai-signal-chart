@@ -59,7 +59,13 @@ class BacktestEngine:
                 - stats: Dict with performance metrics
         """
         # 1. Generate signals from strategy
-        signals = strategy.generate_signals(candles)
+        signals_df = strategy.generate_signals(candles)
+        if isinstance(signals_df, pd.DataFrame) and "signal" in signals_df.columns:
+            signals = signals_df["signal"]
+        elif isinstance(signals_df, pd.Series):
+            signals = signals_df
+        else:
+            signals = pd.Series(0, index=candles.index)
 
         # 2. Initialize state
         cash = self.initial_capital
@@ -72,7 +78,13 @@ class BacktestEngine:
         # 3. Iterate through candles
         for idx, (ts, row) in enumerate(candles.iterrows()):
             price = float(row["close"])
-            signal = int(signals.iloc[idx]) if idx < len(signals) else 0
+            # Get signal for this timestamp
+            # signals is a Series with same index as df
+            # We need to access by label (timestamp)
+            try:
+                signal = int(signals.loc[ts])
+            except (KeyError, ValueError, TypeError):
+                signal = 0
 
             # Buy signal (1) and no position
             if signal == 1 and position == 0:
@@ -96,8 +108,8 @@ class BacktestEngine:
                         "cash_after": cash,
                     })
 
-            # Sell signal (0 or -1) and have position
-            elif signal <= 0 and position > 0:
+            # Sell signal (-1) and have position
+            elif signal == -1 and position > 0:
                 qty = position
                 revenue = qty * price
                 commission = revenue * self.commission_rate

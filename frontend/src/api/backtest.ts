@@ -391,3 +391,75 @@ export async function runStrategyLabBatch(
 
     return response.json();
 }
+
+// ======================
+// Meta Strategy (JSON) API
+// ======================
+
+export interface IndicatorSpec {
+    id: string;
+    type: 'sma' | 'ema' | 'rsi' | 'bollinger';
+    source: string;
+    period?: number;
+    std_dev?: number;
+}
+
+export interface ValueRef {
+    ref?: string;
+    value?: number;
+}
+
+export interface RuleCondition {
+    left: ValueRef;
+    op: '==' | '!=' | '>' | '>=' | '<' | '<=';
+    right: ValueRef;
+}
+
+export interface RuleGroup {
+    all?: (RuleGroup | RuleCondition)[];
+    any?: (RuleGroup | RuleCondition)[];
+}
+
+export interface PositionConfig {
+    direction: 'long_only' | 'short_only' | 'both';
+    max_position: number;
+}
+
+export interface JsonStrategySpec {
+    name: string;
+    description?: string;
+    indicators: IndicatorSpec[];
+    entry_rules: RuleGroup[];
+    exit_rules: RuleGroup[];
+    position: PositionConfig;
+}
+
+export interface JsonStrategyRunRequest {
+    symbol: string;
+    timeframe: string;
+    start_date?: string;
+    end_date?: string;
+    initial_capital: number;
+    commission_rate: number;
+    position_size: number;
+    strategy: JsonStrategySpec;
+}
+
+export async function runJsonStrategy(
+    request: JsonStrategyRunRequest,
+): Promise<BacktestResponse> {
+    const response = await fetch(`${API_BASE}/strategy/run-json`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(request),
+    });
+
+    if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.detail || 'JSON Strategy run failed');
+    }
+
+    return response.json();
+}

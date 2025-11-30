@@ -23,6 +23,7 @@ from backend.models.strategy_lab import (
     StrategyLabBatchResponse,
     StrategyLabSymbolResult
 )
+from backend.strategy.models import JsonStrategyRunRequest
 
 
 app = FastAPI(title="AI Signal Chart Backtest API", version="0.1.0")
@@ -432,6 +433,63 @@ async def run_strategy_lab_batch(request: StrategyLabBatchRequest) -> StrategyLa
             status_code=500,
             detail=f"Strategy Lab batch run failed: {str(e)}"
         )
+
+
+
+@app.post("/strategy/run-json", response_model=BacktestResponse)
+async def run_json_strategy(request: JsonStrategyRunRequest) -> BacktestResponse:
+    """
+    Run a strategy defined in JSON format
+    """
+    try:
+        from backend.strategy.engine import JsonStrategyEngine
+        from backend import data_feed
+        
+        # 1. Get Data
+        candles = data_feed.get_chart_data(
+            symbol=request.symbol,
+            timeframe=request.timeframe,
+            limit=3000,
+            start=request.start_date.isoformat() if request.start_date else None,
+            end=request.end_date.isoformat() if request.end_date else None
+        )
+        
+        if not candles:
+            raise HTTPException(status_code=404, detail=f"No data found for {request.symbol}")
+            
+        df = pd.DataFrame(candles)
+        if "time" not in df.columns:
+            raise ValueError("Data must contain 'time' column")
+        df = df.set_index(pd.to_datetime(df["time"], unit="s"))
+        
+        # 2. Run Strategy Engine
+        engine = JsonStrategyEngine()
+        result = engine.run(
+            df=df,
+            strategy=request.strategy,
+            initial_capital=request.initial_capital,
+            commission_rate=request.commission_rate,
+            position_size=request.position_size
+        )
+        
+        # 3. Format Response (Reuse BacktestResponse)
+        metrics = result.get("stats", {})
+        equity_curve = result.get("equity_curve", [])
+        trades = result.get("trades", [])
+        
+        return BacktestResponse(
+            symbol=request.symbol,
+            timeframe=request.timeframe,
+            strategy=request.strategy.name,
+            metrics=metrics,
+            equity_curve=equity_curve,
+            trades=trades
+        )
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Strategy execution failed: {str(e)}")
 
 
 @app.post("/experiments", status_code=201)
