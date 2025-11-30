@@ -298,21 +298,107 @@ def render_pnl_tab():
 
 
 # =============================================================================
-# Strategy Lab (NEW)
+# Backtest UI (NEW)
 # =============================================================================
 
 
-def render_strategy_lab():
-    """Simple placeholder for Strategy Lab mode."""
-    st.title("🧪 Strategy Lab (Coming Soon)")
-    st.write(
-        "ここでは将来、複数ストラテジーをまとめてテストしたり、"
-        "パラメータのグリッドサーチ結果を一覧・可視化できるようにする予定です。"
-    )
-    st.info(
-        "まずはバックエンドのストラテジー実装とテストを増やしていきましょう。"
-        "この画面はそのあと拡張していけます。"
-    )
+def render_backtest_ui():
+    """
+    Render the Backtest UI tab.
+    Allows users to run simulations via the backend API.
+    """
+    st.title("🧪 Backtest Lab")
+    st.caption("Run simulations using the backend engine.")
+
+    # Input Form
+    with st.form("backtest_form"):
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            symbol = st.text_input("Symbol", value="AAPL")
+            timeframe = st.selectbox("Timeframe", options=["1d", "1h", "5m"], index=0)
+        with col2:
+            start_date = st.date_input("Start Date", value=datetime(2020, 1, 1))
+            end_date = st.date_input("End Date", value=datetime(2023, 12, 31))
+        with col3:
+            initial_capital = st.number_input("Initial Capital", value=1_000_000, step=100_000)
+            commission = st.number_input("Commission Rate", value=0.001, step=0.0001, format="%.4f")
+
+        st.markdown("### Strategy Parameters (MA Cross)")
+        col4, col5 = st.columns(2)
+        with col4:
+            short_window = st.slider("Short Window", 5, 50, 9)
+        with col5:
+            long_window = st.slider("Long Window", 20, 200, 21)
+
+        submitted = st.form_submit_button("▶ Run Backtest")
+
+    if submitted:
+        # API Call
+        import requests
+
+        payload = {
+            "symbol": symbol,
+            "timeframe": timeframe,
+            "start_date": start_date.isoformat(),
+            "end_date": end_date.isoformat(),
+            "initial_capital": initial_capital,
+            "commission_rate": commission,
+            "position_size": 1.0,
+            "strategy": "ma_cross",
+            "short_window": short_window,
+            "long_window": long_window,
+        }
+
+        with st.spinner("Running simulation..."):
+            try:
+                response = requests.post("http://localhost:8000/simulate", json=payload)
+                response.raise_for_status()
+                result = response.json()
+
+                # Display Results
+                st.success("Backtest completed!")
+                
+                # Metrics
+                metrics = result["metrics"]
+                m1, m2, m3, m4 = st.columns(4)
+                m1.metric("Total Return", f"{metrics['return_pct']:.2f}%")
+                m2.metric("Win Rate", f"{metrics['win_rate'] * 100:.1f}%")
+                m3.metric("Max Drawdown", f"{metrics['max_drawdown'] * 100:.2f}%")
+                m4.metric("Trades", metrics["trade_count"])
+
+                # Equity Curve
+                st.subheader("Equity Curve")
+                equity_data = result["equity_curve"]
+                if equity_data:
+                    df_equity = pd.DataFrame(equity_data)
+                    df_equity["date"] = pd.to_datetime(df_equity["date"])
+                    df_equity.set_index("date", inplace=True)
+                    st.line_chart(df_equity["equity"])
+                else:
+                    st.warning("No equity data returned.")
+
+                # Trades Table
+                st.subheader("Trade History")
+                trades_data = result["trades"]
+                if trades_data:
+                    df_trades = pd.DataFrame(trades_data)
+                    st.dataframe(df_trades, use_container_width=True)
+
+                    # CSV Download
+                    csv = df_trades.to_csv(index=False).encode('utf-8')
+                    st.download_button(
+                        label="📥 Download Trades CSV",
+                        data=csv,
+                        file_name=f"backtest_trades_{symbol}.csv",
+                        mime="text/csv",
+                    )
+                else:
+                    st.info("No trades executed.")
+
+            except requests.exceptions.RequestException as e:
+                st.error(f"Backtest failed: {e}")
+                if e.response is not None:
+                    st.error(f"Details: {e.response.text}")
 
 
 # =============================================================================
@@ -342,7 +428,7 @@ def main():
     # Sidebar mode switch
     mode = st.sidebar.selectbox(
         "Mode",
-        options=["Developer Dashboard", "Strategy Lab"],
+        options=["Developer Dashboard", "Backtest Lab", "Strategy Lab"],
         index=0,
     )
 
@@ -387,6 +473,9 @@ def main():
         # Footer
         st.markdown("---")
         st.caption("EXITON Developer Dashboard | Powered by Streamlit & FastAPI")
+
+    elif mode == "Backtest Lab":
+        render_backtest_ui()
 
     elif mode == "Strategy Lab":
         render_strategy_lab()
