@@ -628,171 +628,195 @@ def render_strategy_lab():
                         best_params = best["params"]
                         best_metrics = best["metrics"]
                         
-                        # Best Params Card
-                        st.markdown("### 🏆 Best Parameters")
-                        col1, col2, col3, col4 = st.columns(4)
+                        # Store in session state for persistence
+                        st.session_state["ma_grid_best_params"] = best_params
+                        st.session_state["ma_grid_best_metrics"] = best_metrics
+                        st.session_state["ma_grid_top_results"] = top_results
                         
-                        col1.metric(
-                            "Short Window", 
-                            best_params["short_window"],
-                            help="短期の移動平均線の期間（バー数）です。値が小さいほど価格の変化に敏感になります。"
-                        )
-                        col2.metric(
-                            "Long Window", 
-                            best_params["long_window"],
-                            help="長期の移動平均線の期間（バー数）です。値が大きいほどゆっくりとしたトレンドを捉えます。"
-                        )
-                        col3.metric(
-                            "Total Return", 
-                            f"{best_metrics['return_pct']:.2f}%",
-                            help="バックテスト期間で、初期資産に対して最終的にどれだけ増えたかの割合です。100%なら資産が2倍、200%なら3倍になったことを意味します。"
-                        )
-                        col4.metric(
-                            "Sharpe Ratio", 
-                            f"{best_metrics['sharpe_ratio']:.2f}",
-                            help="リスク（リターンのブレ）に対する効率の良さを表す指標です。一般的には 1.0 以上で良好、2.0 以上で非常に優秀とされています。"
-                        )
-                        
-                        # Prepare Data for Visualization
+                        # Prepare Data for Visualization (and store in session state)
                         rows = []
                         for r in top_results:
                             row = r["params"].copy()
                             row.update(r["metrics"])
                             rows.append(row)
                         df_results = pd.DataFrame(rows)
+                        st.session_state["ma_grid_results_df"] = df_results
                         
-                        # Heatmap
-                        st.subheader("🔥 Performance Heatmap")
-                        st.caption(
-                            "横軸が Short Window、縦軸が Long Window、色が Total Return (%) を表します。"
-                            "明るい色ほど成績が良く、暗い色ほど悪い組み合わせです。"
-                        )
-                        try:
-                            import altair as alt
-                            
-                            chart = alt.Chart(df_results).mark_rect().encode(
-                                x=alt.X('short_window:O', title='Short Window'),
-                                y=alt.Y('long_window:O', title='Long Window'),
-                                color=alt.Color('return_pct:Q', title='Return %', scale=alt.Scale(scheme='viridis')),
-                                tooltip=['short_window', 'long_window', 'return_pct', 'max_drawdown', 'trade_count']
-                            ).properties(
-                                title="Return % by Parameter Combination"
-                            )
-                            st.altair_chart(chart, use_container_width=True)
-                        except ImportError:
-                            st.warning("Altair not installed. Skipping heatmap.")
-                        except Exception as e:
-                            st.warning(f"Could not render heatmap: {e}")
-                            
-                        # Results Table
-                        st.subheader("📊 Top Results")
-                        
-                        # Prepare Display DataFrame
-                        # We use the raw numerical values (df_results) but rename columns for matching config
-                        display_df = df_results.copy()
-                        display_df = display_df.rename(columns={
-                            "short_window": "Short",
-                            "long_window": "Long",
-                            "total_pnl": "Total PnL",
-                            "return_pct": "Total Return (%)",
-                            "sharpe_ratio": "Sharpe",
-                            "max_drawdown": "Max Drawdown (%)",
-                            "win_rate": "Win Rate (%)",
-                            "trade_count": "Trades"
-                        })
-                        
-                        # Select specific columns to display
-                        cols_to_show = [
-                            "Short", "Long", "Total Return (%)", "Sharpe", 
-                            "Max Drawdown (%)", "Win Rate (%)", "Trades", "Total PnL"
-                        ]
-                        # Filter only existing columns (just in case)
-                        existing_cols = [c for c in cols_to_show if c in display_df.columns]
-                        
-                        st.dataframe(
-                            display_df[existing_cols],
-                            column_config={
-                                "Short": st.column_config.NumberColumn(
-                                    "Short",
-                                    help="短期の移動平均線の期間（バー数）です。値が小さいほど価格変動に敏感になります。",
-                                    format="%d"
-                                ),
-                                "Long": st.column_config.NumberColumn(
-                                    "Long",
-                                    help="長期の移動平均線の期間（バー数）です。値が大きいほどゆっくりとしたトレンドを捉えます。",
-                                    format="%d"
-                                ),
-                                "Total Return (%)": st.column_config.NumberColumn(
-                                    "Total Return (%)",
-                                    help="バックテスト期間において、初期資産に対してどれだけ増えたかの割合です。100%なら資産が2倍、200%なら3倍です。",
-                                    format="%.2f%%"
-                                ),
-                                "Sharpe": st.column_config.NumberColumn(
-                                    "Sharpe",
-                                    help="リスク（リターンのブレ）に対する効率の良さを表す指標です。一般的には 1.0 以上で良好、2.0 以上で非常に優秀とされます。",
-                                    format="%.2f"
-                                ),
-                                "Max Drawdown (%)": st.column_config.NumberColumn(
-                                    "Max Drawdown (%)",
-                                    help="バックテスト期間中の資産曲線が、ピークからどれだけ大きく落ち込んだか（最大下落率）です。数値が小さいほど安全です。",
-                                    format="%.2f%%"
-                                ),
-                                "Win Rate (%)": st.column_config.NumberColumn(
-                                    "Win Rate (%)",
-                                    help="全トレードのうち、利益が出たトレードの割合です。高いほど勝ちトレードが多いことを意味しますが、リスクリワードとのバランスも重要です。",
-                                    format="%.2f%%"
-                                ),
-                                "Trades": st.column_config.NumberColumn(
-                                    "Trades",
-                                    help="バックテスト期間中に実行されたトレードの回数です。",
-                                    format="%d"
-                                ),
-                                "Total PnL": st.column_config.NumberColumn(
-                                    "Total PnL",
-                                    help="バックテスト期間全体での最終損益（Profit and Loss）です。通貨単位で表示されます。",
-                                    format="%d" # Simple integer format, or could use currency symbol if desired
-                                ),
-                            },
-                            use_container_width=True
-                        )
-                        
-                        # ==========================================
-                        # Strategy Library Integration (Save Best)
-                        # ==========================================
-                        st.markdown("---")
-                        st.subheader("💾 Save to Strategy Library")
-                        
-                        with st.expander("Save Best Parameters as New Strategy", expanded=False):
-                            with st.form("save_best_strategy_form"):
-                                default_name = f"{symbol}_{timeframe}_MA_{best_params['short_window']}-{best_params['long_window']}_Best"
-                                strategy_name = st.text_input("Strategy Name", value=default_name)
-                                strategy_desc = st.text_area("Description", value=f"Grid Search Result. Return: {best_metrics['return_pct']:.2f}%")
-                                
-                                submitted_save = st.form_submit_button("💾 Save Strategy")
-                                
-                                if submitted_save:
-                                    if not strategy_name:
-                                        st.error("Strategy Name is required.")
-                                    else:
-                                        lib = StrategyLibrary()
-                                        new_strategy = {
-                                            "id": str(uuid.uuid4()),
-                                            "name": strategy_name,
-                                            "description": strategy_desc,
-                                            "created_at": datetime.now().isoformat(),
-                                            "symbol": symbol,
-                                            "timeframe": timeframe,
-                                            "strategy_type": "ma_cross",
-                                            "params": best_params,
-                                            "metrics": best_metrics
-                                        }
-                                        lib.save_strategy(new_strategy)
-                                        st.success(f"Strategy '{strategy_name}' saved successfully!")
-
                 except requests.exceptions.RequestException as e:
                     st.error(f"Optimization failed: {e}")
                     if e.response is not None:
                         st.error(f"Details: {e.response.text}")
+
+    # ==========================================
+    # Display Results (from Session State)
+    # ==========================================
+    # Check if we have results in session state to display
+    if "ma_grid_best_params" in st.session_state and "ma_grid_best_metrics" in st.session_state:
+        best_params = st.session_state["ma_grid_best_params"]
+        best_metrics = st.session_state["ma_grid_best_metrics"]
+        df_results = st.session_state.get("ma_grid_results_df")
+        
+        # Best Params Card
+        st.markdown("### 🏆 Best Parameters")
+        col1, col2, col3, col4 = st.columns(4)
+        
+        col1.metric(
+            "Short Window", 
+            best_params["short_window"],
+            help="短期の移動平均線の期間（バー数）です。値が小さいほど価格の変化に敏感になります。"
+        )
+        col2.metric(
+            "Long Window", 
+            best_params["long_window"],
+            help="長期の移動平均線の期間（バー数）です。値が大きいほどゆっくりとしたトレンドを捉えます。"
+        )
+        col3.metric(
+            "Total Return", 
+            f"{best_metrics['return_pct']:.2f}%",
+            help="バックテスト期間で、初期資産に対して最終的にどれだけ増えたかの割合です。100%なら資産が2倍、200%なら3倍になったことを意味します。"
+        )
+        col4.metric(
+            "Sharpe Ratio", 
+            f"{best_metrics['sharpe_ratio']:.2f}",
+            help="リスク（リターンのブレ）に対する効率の良さを表す指標です。一般的には 1.0 以上で良好、2.0 以上で非常に優秀とされています。"
+        )
+        
+        # Heatmap
+        st.subheader("🔥 Performance Heatmap")
+        st.caption(
+            "横軸が Short Window、縦軸が Long Window、色が Total Return (%) を表します。"
+            "明るい色ほど成績が良く、暗い色ほど悪い組み合わせです。"
+        )
+        try:
+            import altair as alt
+            
+            if df_results is not None:
+                chart = alt.Chart(df_results).mark_rect().encode(
+                    x=alt.X('short_window:O', title='Short Window'),
+                    y=alt.Y('long_window:O', title='Long Window'),
+                    color=alt.Color('return_pct:Q', title='Return %', scale=alt.Scale(scheme='viridis')),
+                    tooltip=['short_window', 'long_window', 'return_pct', 'max_drawdown', 'trade_count']
+                ).properties(
+                    title="Return % by Parameter Combination"
+                )
+                st.altair_chart(chart, use_container_width=True)
+        except ImportError:
+            st.warning("Altair not installed. Skipping heatmap.")
+        except Exception as e:
+            st.warning(f"Could not render heatmap: {e}")
+            
+        # Results Table
+        st.subheader("📊 Top Results")
+        
+        if df_results is not None:
+            # Prepare Display DataFrame
+            # We use the raw numerical values (df_results) but rename columns for matching config
+            display_df = df_results.copy()
+            display_df = display_df.rename(columns={
+                "short_window": "Short",
+                "long_window": "Long",
+                "total_pnl": "Total PnL",
+                "return_pct": "Total Return (%)",
+                "sharpe_ratio": "Sharpe",
+                "max_drawdown": "Max Drawdown (%)",
+                "win_rate": "Win Rate (%)",
+                "trade_count": "Trades"
+            })
+            
+            # Select specific columns to display
+            cols_to_show = [
+                "Short", "Long", "Total Return (%)", "Sharpe", 
+                "Max Drawdown (%)", "Win Rate (%)", "Trades", "Total PnL"
+            ]
+            # Filter only existing columns (just in case)
+            existing_cols = [c for c in cols_to_show if c in display_df.columns]
+            
+            st.dataframe(
+                display_df[existing_cols],
+                column_config={
+                    "Short": st.column_config.NumberColumn(
+                        "Short",
+                        help="短期の移動平均線の期間（バー数）です。値が小さいほど価格変動に敏感になります。",
+                        format="%d"
+                    ),
+                    "Long": st.column_config.NumberColumn(
+                        "Long",
+                        help="長期の移動平均線の期間（バー数）です。値が大きいほどゆっくりとしたトレンドを捉えます。",
+                        format="%d"
+                    ),
+                    "Total Return (%)": st.column_config.NumberColumn(
+                        "Total Return (%)",
+                        help="バックテスト期間において、初期資産に対してどれだけ増えたかの割合です。100%なら資産が2倍、200%なら3倍です。",
+                        format="%.2f%%"
+                    ),
+                    "Sharpe": st.column_config.NumberColumn(
+                        "Sharpe",
+                        help="リスク（リターンのブレ）に対する効率の良さを表す指標です。一般的には 1.0 以上で良好、2.0 以上で非常に優秀とされます。",
+                        format="%.2f"
+                    ),
+                    "Max Drawdown (%)": st.column_config.NumberColumn(
+                        "Max Drawdown (%)",
+                        help="バックテスト期間中の資産曲線が、ピークからどれだけ大きく落ち込んだか（最大下落率）です。数値が小さいほど安全です。",
+                        format="%.2f%%"
+                    ),
+                    "Win Rate (%)": st.column_config.NumberColumn(
+                        "Win Rate (%)",
+                        help="全トレードのうち、利益が出たトレードの割合です。高いほど勝ちトレードが多いことを意味しますが、リスクリワードとのバランスも重要です。",
+                        format="%.2f%%"
+                    ),
+                    "Trades": st.column_config.NumberColumn(
+                        "Trades",
+                        help="バックテスト期間中に実行されたトレードの回数です。",
+                        format="%d"
+                    ),
+                    "Total PnL": st.column_config.NumberColumn(
+                        "Total PnL",
+                        help="バックテスト期間全体での最終損益（Profit and Loss）です。通貨単位で表示されます。",
+                        format="%d" # Simple integer format, or could use currency symbol if desired
+                    ),
+                },
+                use_container_width=True
+            )
+        
+        # ==========================================
+        # Strategy Library Integration (Save Best)
+        # ==========================================
+        st.markdown("---")
+        st.subheader("💾 Save to Strategy Library")
+        
+        with st.expander("Save Best Parameters as New Strategy", expanded=False):
+            with st.form("save_best_strategy_form"):
+                default_name = f"{symbol}_{timeframe}_MA_{best_params['short_window']}-{best_params['long_window']}_Best"
+                strategy_name = st.text_input("Strategy Name", value=default_name)
+                strategy_desc = st.text_area("Description", value=f"Grid Search Result. Return: {best_metrics['return_pct']:.2f}%")
+                
+                submitted_save = st.form_submit_button("💾 Save Strategy")
+                
+                if submitted_save:
+                    if not strategy_name:
+                        st.error("Strategy Name is required.")
+                    else:
+                        # Use session state values for saving
+                        current_best_params = st.session_state.get("ma_grid_best_params")
+                        current_best_metrics = st.session_state.get("ma_grid_best_metrics")
+                        
+                        if not current_best_params or not current_best_metrics:
+                             st.error("Grid Search results missing. Please run optimization first.")
+                        else:
+                            lib = StrategyLibrary()
+                            new_strategy = {
+                                "id": str(uuid.uuid4()),
+                                "name": strategy_name,
+                                "description": strategy_desc,
+                                "created_at": datetime.now().isoformat(),
+                                "symbol": symbol,
+                                "timeframe": timeframe,
+                                "strategy_type": "ma_cross",
+                                "params": current_best_params,
+                                "metrics": current_best_metrics
+                            }
+                            lib.save_strategy(new_strategy)
+                            st.success(f"Strategy '{strategy_name}' saved successfully!")
 
     elif submitted_single: # For other strategies
         # Placeholder for other strategies

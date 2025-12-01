@@ -26,6 +26,8 @@ Strategy Lab で見つけた有望な MA Cross 戦略パラメータを「名前
   - 各戦略の主要パラメータ（Short/Long）とパフォーマンス（Return）を確認可能。
 - **Load Function**:
   - 一覧から戦略を選択して "Load" ボタンを押すと、そのパラメータがシステムにロードされる。
+- **State Persistence**:
+  - Grid Search 結果を `st.session_state` に保持し、リロード（Save時など）しても結果が消えないように修正。
 
 ### 3. Backtest Lab 連携
 - 戦略をロードした状態で Backtest Lab に移動すると、サイドバーの入力フォーム（Symbol, Short, Long）にロードした戦略の値が自動的にセットされる。
