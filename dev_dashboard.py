@@ -165,7 +165,7 @@ def render_sidebar() -> Tuple[str, str, int, int, str, bool]:
     """
     st.sidebar.title("Controls")
 
-    symbol = st.sidebar.selectbox("Symbol", options=["AAPL", "MSFT", "TSLA", "NVDA"], index=0)
+    symbol = render_symbol_selector(key_prefix="dev", container=st.sidebar)
     timeframe = st.sidebar.selectbox("Timeframe", options=["1day", "4h", "1h"], index=0)
     limit = st.sidebar.slider("Lookback periods", min_value=50, max_value=500, value=200, step=10)
     quantity = st.sidebar.number_input("Default Quantity", min_value=1, max_value=10_000, value=100, step=10)
@@ -296,7 +296,7 @@ def render_trades_tab():
 # Helper Functions
 # =============================================================================
 
-def render_symbol_selector(key_prefix: str = "sl") -> str:
+def render_symbol_selector(key_prefix: str = "sl", container: Any = st) -> str:
     """
     Renders a symbol selector with presets and custom input.
     Synchronizes state via session_state using a shared key if desired, 
@@ -335,7 +335,7 @@ def render_symbol_selector(key_prefix: str = "sl") -> str:
     def on_preset_change():
         st.session_state["shared_symbol_preset"] = st.session_state[f"{key_prefix}_preset_select"]
         
-    symbol_preset = st.selectbox(
+    symbol_preset = container.selectbox(
         "Symbol",
         options=SYMBOL_PRESETS,
         index=SYMBOL_PRESETS.index(current_preset) if current_preset in SYMBOL_PRESETS else 0,
@@ -350,7 +350,7 @@ def render_symbol_selector(key_prefix: str = "sl") -> str:
         def on_custom_change():
             st.session_state["shared_custom_symbol"] = st.session_state[f"{key_prefix}_custom_input"]
 
-        custom_symbol = st.text_input(
+        custom_symbol = container.text_input(
             "Custom Symbol",
             value=st.session_state["shared_custom_symbol"],
             key=f"{key_prefix}_custom_input",
@@ -396,7 +396,7 @@ def render_backtest_ui():
             default_long = loaded_strat["params"].get("long_window", 21)
 
     # Use the shared symbol selector
-    symbol = render_symbol_selector(key_prefix="bl")
+    symbol = render_symbol_selector(key_prefix="bl", container=st.sidebar)
     
     timeframe = st.sidebar.selectbox("Timeframe", options=["1d", "1h", "5m"], index=0)
     
@@ -501,7 +501,7 @@ def render_strategy_lab():
     with st.expander("📊 Market Data & Capital Settings", expanded=True):
         col1, col2, col3 = st.columns(3)
         with col1:
-            symbol = st.text_input("Symbol", value="AAPL", key="sl_symbol")
+            symbol = render_symbol_selector(key_prefix="sl", container=col1)
             timeframe = st.selectbox("Timeframe", options=["1d", "1h", "5m"], index=0, key="sl_timeframe")
         with col2:
             start_date = st.date_input("Start Date", value=datetime(2020, 1, 1), key="sl_start")

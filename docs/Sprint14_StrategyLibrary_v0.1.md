@@ -32,6 +32,11 @@ Strategy Lab で見つけた有望な MA Cross 戦略パラメータを「名前
 ### 3. Backtest Lab 連携
 - 戦略をロードした状態で Backtest Lab に移動すると、サイドバーの入力フォーム（Symbol, Short, Long）にロードした戦略の値が自動的にセットされる。
 
+### 4. Symbol Selection UI (Unified)
+- **共通プリセット**: Developer Dashboard, Backtest Lab, Strategy Lab の全モードで共通のシンボルプリセット（AAPL, MSFT, BTC-USD 等）を使用。
+- **Custom Input**: プリセットから "Custom..." を選択することで、任意のシンボルを手動入力可能。
+- **State Sync**: タブ間でシンボル選択状態を同期。
+
 ## 実行方法
 1. `streamlit run dev_dashboard.py`
 2. **Strategy Lab** > **MA Cross** > **Parameter Optimization**
