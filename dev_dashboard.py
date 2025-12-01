@@ -8,10 +8,13 @@ and visualizing strategy behavior.
 This is a *mock* / developer-facing dashboard, not the main user UI.
 """
 
-from __future__ import annotations
-
-from dataclasses import dataclass
+from __future__ import pandas as pd
+import plotly.graph_objects as go
+import requests
 from datetime import datetime, timedelta
+import uuid
+import os
+import json
 from typing import Any, Dict, List, Tuple
 
 import numpy as np
@@ -310,26 +313,38 @@ def render_backtest_ui():
     st.title("🧪 Backtest Lab")
     st.caption("Run simulations using the backend engine.")
 
-    # Input Form
+    # --- Sidebar Inputs ---
+    st.sidebar.header("Backtest Settings")
+
+    # Check for loaded strategy
+    loaded_strat = st.session_state.get("loaded_strategy")
+    default_symbol = "AAPL"
+    default_short = 9
+    default_long = 21
+    
+    if loaded_strat:
+        st.sidebar.success(f"Loaded: {loaded_strat['name']}")
+        default_symbol = loaded_strat.get("symbol", "AAPL")
+        if loaded_strat.get("params"):
+            default_short = loaded_strat["params"].get("short_window", 9)
+            default_long = loaded_strat["params"].get("long_window", 21)
+
+    symbol = st.sidebar.text_input("Symbol", value=default_symbol)
+    timeframe = st.sidebar.selectbox("Timeframe", options=["1d", "1h", "5m"], index=0)
+    
+    start_date = st.sidebar.date_input("Start Date", value=datetime(2020, 1, 1))
+    end_date = st.sidebar.date_input("End Date", value=datetime(2023, 12, 31))
+    
+    initial_capital = st.sidebar.number_input("Initial Capital", value=1_000_000, step=100_000)
+    commission = st.sidebar.number_input("Commission Rate", value=0.001, step=0.0001, format="%.4f")
+    
+    st.sidebar.subheader("Strategy Parameters (MA Cross)")
+    short_window = st.sidebar.number_input("Short Window", min_value=1, value=default_short)
+    long_window = st.sidebar.number_input("Long Window", min_value=1, value=default_long)
+
+    # Input Form (for the submit button)
     with st.form("backtest_form"):
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            symbol = st.text_input("Symbol", value="AAPL")
-            timeframe = st.selectbox("Timeframe", options=["1d", "1h", "5m"], index=0)
-        with col2:
-            start_date = st.date_input("Start Date", value=datetime(2020, 1, 1))
-            end_date = st.date_input("End Date", value=datetime(2023, 12, 31))
-        with col3:
-            initial_capital = st.number_input("Initial Capital", value=1_000_000, step=100_000)
-            commission = st.number_input("Commission Rate", value=0.001, step=0.0001, format="%.4f")
-
-        st.markdown("### Strategy Parameters (MA Cross)")
-        col4, col5 = st.columns(2)
-        with col4:
-            short_window = st.slider("Short Window", 5, 50, 9)
-        with col5:
-            long_window = st.slider("Long Window", 20, 200, 21)
-
+        st.markdown("---") # Separator for the button
         submitted = st.form_submit_button("▶ Run Backtest")
 
     if submitted:
@@ -738,6 +753,39 @@ def render_strategy_lab():
                             use_container_width=True
                         )
                         
+                        # ==========================================
+                        # Strategy Library Integration (Save Best)
+                        # ==========================================
+                        st.markdown("---")
+                        st.subheader("💾 Save to Strategy Library")
+                        
+                        with st.expander("Save Best Parameters as New Strategy", expanded=False):
+                            with st.form("save_best_strategy_form"):
+                                default_name = f"{symbol}_{timeframe}_MA_{best_params['short_window']}-{best_params['long_window']}_Best"
+                                strategy_name = st.text_input("Strategy Name", value=default_name)
+                                strategy_desc = st.text_area("Description", value=f"Grid Search Result. Return: {best_metrics['return_pct']:.2f}%")
+                                
+                                submitted_save = st.form_submit_button("💾 Save Strategy")
+                                
+                                if submitted_save:
+                                    if not strategy_name:
+                                        st.error("Strategy Name is required.")
+                                    else:
+                                        lib = StrategyLibrary()
+                                        new_strategy = {
+                                            "id": str(uuid.uuid4()),
+                                            "name": strategy_name,
+                                            "description": strategy_desc,
+                                            "created_at": datetime.now().isoformat(),
+                                            "symbol": symbol,
+                                            "timeframe": timeframe,
+                                            "strategy_type": "ma_cross",
+                                            "params": best_params,
+                                            "metrics": best_metrics
+                                        }
+                                        lib.save_strategy(new_strategy)
+                                        st.success(f"Strategy '{strategy_name}' saved successfully!")
+
                 except requests.exceptions.RequestException as e:
                     st.error(f"Optimization failed: {e}")
                     if e.response is not None:
@@ -752,6 +800,112 @@ def render_strategy_lab():
             st.json({"rsi_period": rsi_period, "oversold": oversold, "overbought": overbought})
         elif strategy_type == "Breakout":
             st.json({"lookback_window": lookback_window, "threshold": threshold})
+            
+    # ==========================================
+    # Strategy Library List & Load
+    # ==========================================
+    st.markdown("---")
+    st.subheader("📚 Saved Strategies")
+    
+    lib = StrategyLibrary()
+    strategies = lib.load_strategies()
+    
+    if not strategies:
+        st.info("No strategies saved yet.")
+    else:
+        # Create display dataframe
+        strat_rows = []
+        for s in strategies:
+            row = {
+                "ID": s["id"],
+                "Name": s["name"],
+                "Symbol": s["symbol"],
+                "Timeframe": s["timeframe"],
+                "Type": s["strategy_type"],
+                "Short": s["params"].get("short_window"),
+                "Long": s["params"].get("long_window"),
+                "Return (%)": f"{s.get('metrics', {}).get('return_pct', 0):.2f}%",
+                "Created": s["created_at"][:16].replace("T", " ")
+            }
+            strat_rows.append(row)
+        
+        df_strats = pd.DataFrame(strat_rows)
+        
+        # Display as table with selection
+        # Using st.dataframe with selection is available in newer Streamlit, 
+        # but for compatibility we can use a selectbox or buttons.
+        # Let's use a selectbox for "Load" action.
+        
+        st.dataframe(df_strats.drop(columns=["ID"]), use_container_width=True)
+        
+        col_load1, col_load2 = st.columns([3, 1])
+        with col_load1:
+            selected_strat_name = st.selectbox(
+                "Select Strategy to Load", 
+                options=[s["name"] for s in strategies],
+                key="strat_selector"
+            )
+        with col_load2:
+            st.write("") # Spacer
+            st.write("") # Spacer
+            if st.button("📂 Load Strategy"):
+                # Find selected strategy
+                selected_strat = next((s for s in strategies if s["name"] == selected_strat_name), None)
+                if selected_strat:
+                    # Update Session State for Strategy Lab
+                    st.session_state["sl_symbol"] = selected_strat["symbol"]
+                    st.session_state["sl_timeframe"] = selected_strat["timeframe"]
+                    
+                    # Store for Backtest Lab
+                    st.session_state["loaded_strategy"] = selected_strat
+                    
+                    st.success(f"Loaded '{selected_strat_name}'. Please check parameters.")
+                    # Note: We can't easily update the number_input widgets directly if they are already rendered.
+                    # But we can set session state if keys are used.
+                    # Currently number_inputs don't have keys for params. 
+                    # We will rely on the user seeing the loaded info or we need to refactor inputs to use keys.
+                    # For v0.1, let's show the loaded params clearly.
+                    
+                    st.info(f"**Loaded Parameters:** Short={selected_strat['params']['short_window']}, Long={selected_strat['params']['long_window']}")
+                    st.caption("Go to 'Backtest Lab' to use these parameters instantly.")
+
+
+class StrategyLibrary:
+    """
+    Simple file-based strategy library manager.
+    """
+    FILE_PATH = "data/strategies.json"
+
+    def __init__(self):
+        self._ensure_file()
+
+    def _ensure_file(self):
+        if not os.path.exists("data"):
+            os.makedirs("data")
+        if not os.path.exists(self.FILE_PATH):
+            with open(self.FILE_PATH, "w") as f:
+                json.dump({"strategies": []}, f)
+
+    def load_strategies(self) -> List[Dict]:
+        try:
+            with open(self.FILE_PATH, "r") as f:
+                data = json.load(f)
+                return data.get("strategies", [])
+        except Exception:
+            return []
+
+    def save_strategy(self, strategy: Dict):
+        strategies = self.load_strategies()
+        strategies.append(strategy)
+        with open(self.FILE_PATH, "w") as f:
+            json.dump({"strategies": strategies}, f, indent=2)
+
+    def get_strategy(self, strategy_id: str) -> Optional[Dict]:
+        strategies = self.load_strategies()
+        for s in strategies:
+            if s["id"] == strategy_id:
+                return s
+        return None
 
 
 # =============================================================================
