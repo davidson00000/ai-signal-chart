@@ -484,6 +484,37 @@ def render_backtest_ui():
     
     st.markdown("---")
     
+    # ==========================================
+    # Loaded Strategy Info Display
+    # ==========================================
+    if strategies:  # Only show if there are saved strategies
+        loaded_strat_info = None
+        # Check if a strategy was loaded from the section above
+        for s in strategies:
+            if (s.get("symbol") == st.session_state.get("shared_symbol_preset") and
+                s["params"].get("short_window") == st.session_state.get("bt_short_window") and
+                s["params"].get("long_window") == st.session_state.get("bt_long_window")):
+                loaded_strat_info = s
+                break
+        
+        if loaded_strat_info:
+            with st.expander("📋 Currently Loaded Strategy", expanded=True):
+                col_info1, col_info2 = st.columns(2)
+                with col_info1:
+                    st.write(f"**Name:** {loaded_strat_info['name']}")
+                    st.write(f"**Symbol:** {loaded_strat_info['symbol']}")
+                    st.write(f"**Timeframe:** {loaded_strat_info['timeframe']}")
+                with col_info2:
+                    params = loaded_strat_info.get("params", {})
+                    metrics = loaded_strat_info.get("metrics", {})
+                    st.write(f"**Parameters:** MA({params.get('short_window')}, {params.get('long_window')})")
+                    st.write(f"**Return:** {metrics.get('return_pct', 0):.2f}%")
+                
+                if loaded_strat_info.get('description'):
+                    st.caption(f"*Description: {loaded_strat_info['description']}*")
+            
+            st.markdown("---")
+    
     # --- Run Backtest Button ---
     # Input Form (for the submit button)
     with st.form("backtest_form"):
@@ -992,7 +1023,7 @@ def render_strategy_lab():
             st.json({"lookback_window": lookback_window, "threshold": threshold})
             
     # ==========================================
-    # Strategy Library List & Load
+    # Saved Strategies Section
     # ==========================================
     st.markdown("---")
     st.subheader("📚 Saved Strategies")
@@ -1000,51 +1031,166 @@ def render_strategy_lab():
     lib = StrategyLibrary()
     strategies = lib.load_strategies()
     
+    # Ensure all strategies have favorite field for backward compatibility
+    for s in strategies:
+        if "favorite" not in s:
+            s["favorite"] = False
+    
     if not strategies:
         st.info("No strategies saved yet.")
     else:
-        # Create display dataframe
-        strat_rows = []
-        for s in strategies:
-            row = {
-                "ID": s["id"],
-                "Name": s["name"],
-                "Symbol": s["symbol"],
-                "Timeframe": s["timeframe"],
-                "Type": s["strategy_type"],
-                "Short": s["params"].get("short_window"),
-                "Long": s["params"].get("long_window"),
-                "Return (%)": f"{s.get('metrics', {}).get('return_pct', 0):.2f}%",
-                "Created": s["created_at"][:16].replace("T", " ")
-            }
-            strat_rows.append(row)
+        # Filters
+        st.markdown("#### Filters & Sorting")
+        col_f1, col_f2, col_f3, col_f4 = st.columns(4)
         
-        df_strats = pd.DataFrame(strat_rows)
+        with col_f1:
+            # Symbol filter
+            unique_symbols = sorted(set(s["symbol"] for s in strategies))
+            symbol_filter = st.selectbox("Symbol", ["All"] + unique_symbols, key="strat_filter_symbol")
         
-        # Display as table with selection
-        # Using st.dataframe with selection is available in newer Streamlit, 
-        # but for compatibility we can use a selectbox or buttons.
-        # Let's use a selectbox for "Load" action.
+        with col_f2:
+            # Timeframe filter
+            unique_timeframes = sorted(set(s["timeframe"] for s in strategies))
+            timeframe_filter = st.selectbox("Timeframe", ["All"] + unique_timeframes, key="strat_filter_timeframe")
         
-        st.dataframe(df_strats.drop(columns=["ID"]), use_container_width=True)
+        with col_f3:
+            # Favorite filter
+            favorite_only = st.checkbox("⭐ Favorites only", key="strat_filter_favorite")
         
-        col_load1, col_load2 = st.columns([3, 1])
-        with col_load1:
-            selected_strat_name = st.selectbox(
-                "Select Strategy to Load", 
-                options=[s["name"] for s in strategies],
-                key="strat_selector"
-            )
-        with col_load2:
-            st.write("")  # Spacer
-            if st.button("📂 Load Strategy", key="sl_load_strategy_button"):
-                selected_strat = next((s for s in strategies if s["name"] == selected_strat_name), None)
+        with col_f4:
+            # Sorting
+            sort_options = ["Return (%)", "Max Drawdown", "Created (newest)", "Created (oldest)", "Name"]
+            sort_by = st.selectbox("Sort by", sort_options, key="strat_sort")
+        
+        # Apply filters
+        filtered_strategies = strategies
+        if symbol_filter != "All":
+            filtered_strategies = [s for s in filtered_strategies if s["symbol"] == symbol_filter]
+        if timeframe_filter != "All":
+            filtered_strategies = [s for s in filtered_strategies if s["timeframe"] == timeframe_filter]
+        if favorite_only:
+            filtered_strategies = [s for s in filtered_strategies if s.get("favorite", False)]
+        
+        # Apply sorting
+        if sort_by == "Return (%)":
+            filtered_strategies = sorted(filtered_strategies, key=lambda s: s.get("metrics", {}).get("return_pct", 0), reverse=True)
+        elif sort_by == "Max Drawdown":
+            filtered_strategies = sorted(filtered_strategies, key=lambda s: s.get("metrics", {}).get("max_drawdown", 0))
+        elif sort_by == "Created (newest)":
+            filtered_strategies = sorted(filtered_strategies, key=lambda s: s.get("created_at", ""), reverse=True)
+        elif sort_by == "Created (oldest)":
+            filtered_strategies = sorted(filtered_strategies, key=lambda s: s.get("created_at", ""))
+        elif sort_by == "Name":
+            filtered_strategies = sorted(filtered_strategies, key=lambda s: s.get("name", ""))
+        
+        if not filtered_strategies:
+            st.info("No strategies match the current filters.")
+        else:
+            # Display table
+            st.markdown(f"**Found {len(filtered_strategies)} strategies**")
+            
+            # Create display dataframe
+            strat_rows = []
+            for s in filtered_strategies:
+                row = {
+                    "ID": s["id"],
+                    "⭐": "⭐" if s.get("favorite", False) else "☆",
+                    "Name": s["name"],
+                    "Symbol": s["symbol"],
+                    "Timeframe": s["timeframe"],
+                    "Type": s["strategy_type"],
+                    "Short": s["params"].get("short_window"),
+                    "Long": s["params"].get("long_window"),
+                    "Return (%)": f"{s.get('metrics', {}).get('return_pct', 0):.2f}%",
+                    "Created": s["created_at"][:16].replace("T", " ")
+                }
+                strat_rows.append(row)
+            
+            df_strats = pd.DataFrame(strat_rows)
+            st.dataframe(df_strats.drop(columns=["ID"]), use_container_width=True)
+            
+            # Actions
+            st.markdown("#### Actions")
+            col_action1, col_action2 = st.columns(2)
+            
+            with col_action1:
+                selected_strat_name = st.selectbox(
+                    "Select Strategy", 
+                    options=[s["name"] for s in filtered_strategies],
+                    key="strat_action_selector"
+                )
+            
+            with col_action2:
+                action_cols = st.columns(4)
+                
+                selected_strat = next((s for s in filtered_strategies if s["name"] == selected_strat_name), None)
+                
                 if selected_strat:
-                    # Save loaded strategy to separate session state key
-                    # Don't directly modify widget keys (st_l_*) to avoid StreamlitAPIException
-                    st.session_state["strategy_lab_loaded_strategy"] = selected_strat
-                    st.success(f"Loaded '{selected_strat_name}'. Parameters will be applied on next render.")
-                    st.rerun()
+                    with action_cols[0]:
+                        if st.button("⭐ Toggle Favorite", key="strat_action_favorite"):
+                            lib.toggle_favorite(selected_strat["id"])
+                            st.success(f"Toggled favorite for '{selected_strat_name}'")
+                            st.rerun()
+                    
+                    with action_cols[1]:
+                        if st.button("📂 Load", key="strat_action_load"):
+                            st.session_state["strategy_lab_loaded_strategy"] = selected_strat
+                            st.success(f"Loaded '{selected_strat_name}'. Parameters will be applied on next render.")
+                            st.rerun()
+                    
+                    with action_cols[2]:
+                        if st.button("✏️ Rename", key="strat_action_rename"):
+                            st.session_state["rename_strategy_id"] = selected_strat["id"]
+                            st.session_state["rename_strategy_name"] = selected_strat["name"]
+                    
+                    with action_cols[3]:
+                        if st.button("🗑️ Delete", key="strat_action_delete"):
+                            st.session_state["delete_strategy_id"] = selected_strat["id"]
+                            st.session_state["delete_strategy_name"] = selected_strat["name"]
+            
+            # Rename dialog
+            if "rename_strategy_id" in st.session_state:
+                st.markdown("---")
+                st.markdown("### ✏️ Rename Strategy")
+                new_name = st.text_input(
+                    "New Name", 
+                    value=st.session_state.get("rename_strategy_name", ""),
+                    key="rename_input"
+                )
+                col_r1, col_r2 = st.columns(2)
+                with col_r1:
+                    if st.button("💾 Save", key="rename_save"):
+                        if new_name.strip():
+                            lib.update_strategy(st.session_state["rename_strategy_id"], {"name": new_name.strip()})
+                            st.success(f"Renamed to '{new_name}'")
+                            del st.session_state["rename_strategy_id"]
+                            del st.session_state["rename_strategy_name"]
+                            st.rerun()
+                        else:
+                            st.warning("Name cannot be empty")
+                with col_r2:
+                    if st.button("❌ Cancel", key="rename_cancel"):
+                        del st.session_state["rename_strategy_id"]
+                        del st.session_state["rename_strategy_name"]
+                        st.rerun()
+            
+            # Delete confirmation
+            if "delete_strategy_id" in st.session_state:
+                st.markdown("---")
+                st.warning(f"⚠️ Are you sure you want to delete '{st.session_state.get('delete_strategy_name')}'?")
+                col_d1, col_d2 = st.columns(2)
+                with col_d1:
+                    if st.button("🗑️ Confirm Delete", key="delete_confirm"):
+                        lib.delete_strategy(st.session_state["delete_strategy_id"])
+                        st.success(f"Deleted '{st.session_state['delete_strategy_name']}'")
+                        del st.session_state["delete_strategy_id"]
+                        del st.session_state["delete_strategy_name"]
+                        st.rerun()
+                with col_d2:
+                    if st.button("❌ Cancel", key="delete_cancel"):
+                        del st.session_state["delete_strategy_id"]
+                        del st.session_state["delete_strategy_name"]
+                        st.rerun()
 
     # ==========================================
     # Symbol Preset Settings (Developer Tools)
@@ -1128,6 +1274,9 @@ class StrategyLibrary:
 
     def save_strategy(self, strategy: Dict):
         strategies = self.load_strategies()
+        # Ensure favorite field exists (for backward compatibility)
+        if "favorite" not in strategy:
+            strategy["favorite"] = False
         strategies.append(strategy)
         with open(self.FILE_PATH, "w") as f:
             json.dump({"strategies": strategies}, f, indent=2)
@@ -1138,6 +1287,40 @@ class StrategyLibrary:
             if s["id"] == strategy_id:
                 return s
         return None
+    
+    def update_strategy(self, strategy_id: str, updates: Dict) -> bool:
+        """Update specific fields of a strategy"""
+        strategies = self.load_strategies()
+        for i, s in enumerate(strategies):
+            if s["id"] == strategy_id:
+                strategies[i].update(updates)
+                with open(self.FILE_PATH, "w") as f:
+                    json.dump({"strategies": strategies}, f, indent=2)
+                return True
+        return False
+    
+    def delete_strategy(self, strategy_id: str) -> bool:
+        """Delete a strategy by ID"""
+        strategies = self.load_strategies()
+        original_len = len(strategies)
+        strategies = [s for s in strategies if s["id"] != strategy_id]
+        if len(strategies) < original_len:
+            with open(self.FILE_PATH, "w") as f:
+                json.dump({"strategies": strategies}, f, indent=2)
+            return True
+        return False
+    
+    def toggle_favorite(self, strategy_id: str) -> bool:
+        """Toggle favorite status of a strategy"""
+        strategies = self.load_strategies()
+        for i, s in enumerate(strategies):
+            if s["id"] == strategy_id:
+                current_favorite = s.get("favorite", False)
+                strategies[i]["favorite"] = not current_favorite
+                with open(self.FILE_PATH, "w") as f:
+                    json.dump({"strategies": strategies}, f, indent=2)
+                return True
+        return False
 
 
 # =============================================================================
