@@ -8,7 +8,9 @@ and visualizing strategy behavior.
 This is a *mock* / developer-facing dashboard, not the main user UI.
 """
 
-from __future__ import pandas as pd
+from __future__ import annotations
+
+import pandas as pd
 import plotly.graph_objects as go
 import requests
 from datetime import datetime, timedelta
