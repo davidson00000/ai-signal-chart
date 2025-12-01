@@ -402,21 +402,71 @@ def render_backtest_ui():
 
 
 # =============================================================================
-# Strategy Lab (Placeholder)
+# Strategy Lab (v0.1)
 # =============================================================================
 
 
 def render_strategy_lab():
-    """Simple placeholder for Strategy Lab mode."""
-    st.title("🧪 Strategy Lab (Coming Soon)")
-    st.write(
-        "ここでは将来、複数ストラテジーをまとめてテストしたり、"
-        "パラメータのグリッドサーチ結果を一覧・可視化できるようにする予定です。"
+    """
+    Render the Strategy Lab UI (v0.1).
+    Allows users to select strategy templates and input parameters.
+    """
+    st.title("🧪 Strategy Lab")
+    st.caption("Design and test algorithmic strategies.")
+
+    # Strategy Selection
+    strategy_type = st.selectbox(
+        "Select Strategy Template",
+        options=["MA Cross", "RSI Reversal", "Breakout"],
+        index=0
     )
-    st.info(
-        "まずはバックエンドのストラテジー実装とテストを増やしていきましょう。"
-        "この画面はそのあと拡張していけます。"
-    )
+
+    st.markdown("---")
+    st.subheader("Strategy Parameters")
+
+    # Dynamic Form based on selection
+    with st.form("strategy_form"):
+        if strategy_type == "MA Cross":
+            st.markdown("**Moving Average Crossover**")
+            st.caption("Buy when Short MA crosses above Long MA. Sell when Short MA crosses below Long MA.")
+            col1, col2 = st.columns(2)
+            with col1:
+                short_window = st.number_input("Short Window", min_value=1, value=9)
+            with col2:
+                long_window = st.number_input("Long Window", min_value=1, value=21)
+
+        elif strategy_type == "RSI Reversal":
+            st.markdown("**RSI Reversal**")
+            st.caption("Buy when RSI crosses below Oversold. Sell when RSI crosses above Overbought.")
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                rsi_period = st.number_input("RSI Period", min_value=2, value=14)
+            with col2:
+                oversold = st.number_input("Oversold Level", min_value=1, max_value=49, value=30)
+            with col3:
+                overbought = st.number_input("Overbought Level", min_value=51, max_value=99, value=70)
+
+        elif strategy_type == "Breakout":
+            st.markdown("**Breakout Strategy**")
+            st.caption("Buy when price breaks above N-period high. Sell when price breaks below N-period low.")
+            col1, col2 = st.columns(2)
+            with col1:
+                lookback_window = st.number_input("Lookback Window", min_value=1, value=20)
+            with col2:
+                threshold = st.number_input("Threshold Multiplier", min_value=1.0, value=1.0, step=0.1)
+
+        st.markdown("---")
+        submitted = st.form_submit_button("🚀 Run Strategy Analysis")
+
+    if submitted:
+        st.info(f"**{strategy_type}** selected. (v0.1 のため実行機能は未実装です)")
+        st.write("Parameters captured:")
+        if strategy_type == "MA Cross":
+            st.json({"short_window": short_window, "long_window": long_window})
+        elif strategy_type == "RSI Reversal":
+            st.json({"rsi_period": rsi_period, "oversold": oversold, "overbought": overbought})
+        elif strategy_type == "Breakout":
+            st.json({"lookback_window": lookback_window, "threshold": threshold})
 
 
 # =============================================================================
