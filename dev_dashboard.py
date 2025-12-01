@@ -669,10 +669,9 @@ def render_strategy_lab():
                         # Results Table
                         st.subheader("📊 Top Results")
                         
-                        # Format Table
+                        # Prepare Display DataFrame
+                        # We use the raw numerical values (df_results) but rename columns for matching config
                         display_df = df_results.copy()
-                        
-                        # Rename columns
                         display_df = display_df.rename(columns={
                             "short_window": "Short",
                             "long_window": "Long",
@@ -684,27 +683,60 @@ def render_strategy_lab():
                             "trade_count": "Trades"
                         })
                         
-                        # Format values
-                        # Note: We check if column exists before formatting to be safe
-                        if "Total PnL" in display_df.columns:
-                            display_df["Total PnL"] = display_df["Total PnL"].apply(lambda x: f"{x:,.0f}")
-                        if "Total Return (%)" in display_df.columns:
-                            display_df["Total Return (%)"] = display_df["Total Return (%)"].apply(lambda x: f"{x:.2f}%")
-                        if "Sharpe" in display_df.columns:
-                            display_df["Sharpe"] = display_df["Sharpe"].apply(lambda x: f"{x:.2f}" if x is not None else "N/A")
-                        if "Max Drawdown (%)" in display_df.columns:
-                            display_df["Max Drawdown (%)"] = display_df["Max Drawdown (%)"].apply(lambda x: f"{x * 100:.2f}%") # Assuming MDD is 0.0-1.0
-                        if "Win Rate (%)" in display_df.columns:
-                            display_df["Win Rate (%)"] = display_df["Win Rate (%)"].apply(lambda x: f"{x * 100:.2f}%")
-                        
-                        # Select specific columns to display if they exist
+                        # Select specific columns to display
                         cols_to_show = [
                             "Short", "Long", "Total Return (%)", "Sharpe", 
                             "Max Drawdown (%)", "Win Rate (%)", "Trades", "Total PnL"
                         ]
+                        # Filter only existing columns (just in case)
                         existing_cols = [c for c in cols_to_show if c in display_df.columns]
                         
-                        st.dataframe(display_df[existing_cols], use_container_width=True)
+                        st.dataframe(
+                            display_df[existing_cols],
+                            column_config={
+                                "Short": st.column_config.NumberColumn(
+                                    "Short",
+                                    help="短期の移動平均線の期間（バー数）です。値が小さいほど価格変動に敏感になります。",
+                                    format="%d"
+                                ),
+                                "Long": st.column_config.NumberColumn(
+                                    "Long",
+                                    help="長期の移動平均線の期間（バー数）です。値が大きいほどゆっくりとしたトレンドを捉えます。",
+                                    format="%d"
+                                ),
+                                "Total Return (%)": st.column_config.NumberColumn(
+                                    "Total Return (%)",
+                                    help="バックテスト期間において、初期資産に対してどれだけ増えたかの割合です。100%なら資産が2倍、200%なら3倍です。",
+                                    format="%.2f%%"
+                                ),
+                                "Sharpe": st.column_config.NumberColumn(
+                                    "Sharpe",
+                                    help="リスク（リターンのブレ）に対する効率の良さを表す指標です。一般的には 1.0 以上で良好、2.0 以上で非常に優秀とされます。",
+                                    format="%.2f"
+                                ),
+                                "Max Drawdown (%)": st.column_config.NumberColumn(
+                                    "Max Drawdown (%)",
+                                    help="バックテスト期間中の資産曲線が、ピークからどれだけ大きく落ち込んだか（最大下落率）です。数値が小さいほど安全です。",
+                                    format="%.2f%%"
+                                ),
+                                "Win Rate (%)": st.column_config.NumberColumn(
+                                    "Win Rate (%)",
+                                    help="全トレードのうち、利益が出たトレードの割合です。高いほど勝ちトレードが多いことを意味しますが、リスクリワードとのバランスも重要です。",
+                                    format="%.2f%%"
+                                ),
+                                "Trades": st.column_config.NumberColumn(
+                                    "Trades",
+                                    help="バックテスト期間中に実行されたトレードの回数です。",
+                                    format="%d"
+                                ),
+                                "Total PnL": st.column_config.NumberColumn(
+                                    "Total PnL",
+                                    help="バックテスト期間全体での最終損益（Profit and Loss）です。通貨単位で表示されます。",
+                                    format="%d" # Simple integer format, or could use currency symbol if desired
+                                ),
+                            },
+                            use_container_width=True
+                        )
                         
                 except requests.exceptions.RequestException as e:
                     st.error(f"Optimization failed: {e}")

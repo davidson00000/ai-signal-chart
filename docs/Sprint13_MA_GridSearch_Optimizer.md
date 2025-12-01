@@ -28,8 +28,10 @@ Strategy Lab にて、MA Cross 戦略の最適なパラメータ（Short/Long Wi
   - Total PnL をカンマ区切り表示。
 - **ツールチップ**:
   - 各メトリクス（Short/Long Window, Return, Sharpe, MDD, Win Rate）にマウスオーバーで解説を表示する機能を追加。
+  - **Top Results テーブル** の各カラムヘッダーにも解説ツールチップを追加。
 - **テーブル整形**:
   - カラム名を直感的な名称（Short, Long, Total Return (%) 等）に変更。
+  - `st.column_config` を使用して数値フォーマットとソート機能を最適化。
 
 ## 実行方法
 1. `streamlit run dev_dashboard.py`
