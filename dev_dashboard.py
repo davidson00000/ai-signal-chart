@@ -613,10 +613,27 @@ def render_strategy_lab():
                         # Best Params Card
                         st.markdown("### 🏆 Best Parameters")
                         col1, col2, col3, col4 = st.columns(4)
-                        col1.metric("Short Window", best_params["short_window"])
-                        col2.metric("Long Window", best_params["long_window"])
-                        col3.metric("Total Return", f"{best_metrics['return_pct']:.2f}%")
-                        col4.metric("Sharpe Ratio", f"{best_metrics['sharpe_ratio']:.2f}")
+                        
+                        col1.metric(
+                            "Short Window", 
+                            best_params["short_window"],
+                            help="短期の移動平均線の期間（バー数）です。値が小さいほど価格の変化に敏感になります。"
+                        )
+                        col2.metric(
+                            "Long Window", 
+                            best_params["long_window"],
+                            help="長期の移動平均線の期間（バー数）です。値が大きいほどゆっくりとしたトレンドを捉えます。"
+                        )
+                        col3.metric(
+                            "Total Return", 
+                            f"{best_metrics['return_pct']:.2f}%",
+                            help="バックテスト期間で、初期資産に対して最終的にどれだけ増えたかの割合です。100%なら資産が2倍、200%なら3倍になったことを意味します。"
+                        )
+                        col4.metric(
+                            "Sharpe Ratio", 
+                            f"{best_metrics['sharpe_ratio']:.2f}",
+                            help="リスク（リターンのブレ）に対する効率の良さを表す指標です。一般的には 1.0 以上で良好、2.0 以上で非常に優秀とされています。"
+                        )
                         
                         # Prepare Data for Visualization
                         rows = []
@@ -628,6 +645,10 @@ def render_strategy_lab():
                         
                         # Heatmap
                         st.subheader("🔥 Performance Heatmap")
+                        st.caption(
+                            "横軸が Short Window、縦軸が Long Window、色が Total Return (%) を表します。"
+                            "明るい色ほど成績が良く、暗い色ほど悪い組み合わせです。"
+                        )
                         try:
                             import altair as alt
                             
@@ -647,7 +668,43 @@ def render_strategy_lab():
                             
                         # Results Table
                         st.subheader("📊 Top Results")
-                        st.dataframe(df_results, use_container_width=True)
+                        
+                        # Format Table
+                        display_df = df_results.copy()
+                        
+                        # Rename columns
+                        display_df = display_df.rename(columns={
+                            "short_window": "Short",
+                            "long_window": "Long",
+                            "total_pnl": "Total PnL",
+                            "return_pct": "Total Return (%)",
+                            "sharpe_ratio": "Sharpe",
+                            "max_drawdown": "Max Drawdown (%)",
+                            "win_rate": "Win Rate (%)",
+                            "trade_count": "Trades"
+                        })
+                        
+                        # Format values
+                        # Note: We check if column exists before formatting to be safe
+                        if "Total PnL" in display_df.columns:
+                            display_df["Total PnL"] = display_df["Total PnL"].apply(lambda x: f"{x:,.0f}")
+                        if "Total Return (%)" in display_df.columns:
+                            display_df["Total Return (%)"] = display_df["Total Return (%)"].apply(lambda x: f"{x:.2f}%")
+                        if "Sharpe" in display_df.columns:
+                            display_df["Sharpe"] = display_df["Sharpe"].apply(lambda x: f"{x:.2f}" if x is not None else "N/A")
+                        if "Max Drawdown (%)" in display_df.columns:
+                            display_df["Max Drawdown (%)"] = display_df["Max Drawdown (%)"].apply(lambda x: f"{x * 100:.2f}%") # Assuming MDD is 0.0-1.0
+                        if "Win Rate (%)" in display_df.columns:
+                            display_df["Win Rate (%)"] = display_df["Win Rate (%)"].apply(lambda x: f"{x * 100:.2f}%")
+                        
+                        # Select specific columns to display if they exist
+                        cols_to_show = [
+                            "Short", "Long", "Total Return (%)", "Sharpe", 
+                            "Max Drawdown (%)", "Win Rate (%)", "Trades", "Total PnL"
+                        ]
+                        existing_cols = [c for c in cols_to_show if c in display_df.columns]
+                        
+                        st.dataframe(display_df[existing_cols], use_container_width=True)
                         
                 except requests.exceptions.RequestException as e:
                     st.error(f"Optimization failed: {e}")

@@ -17,9 +17,19 @@ Strategy Lab にて、MA Cross 戦略の最適なパラメータ（Short/Long Wi
   - MA Cross 戦略選択時に「Single Run」と「Parameter Optimization」のタブを表示。
   - 最適化タブでは探索範囲を指定して実行可能。
 - **可視化**:
-  - **Best Parameters**: 最もリターンの高かったパラメータと指標を表示。
+  - **Best Parameters**: 最もリターンの高かったパラメータと指標を表示（ツールチップ解説付き）。
   - **Heatmap**: Short Window vs Long Window のリターンをヒートマップで可視化（Altair使用）。
-  - **Result Table**: 上位の結果をテーブル表示。
+  - **Result Table**: 上位の結果をテーブル表示（フォーマット整形済み）。
+
+## UI改善 (v0.3.1)
+- **数値フォーマット**:
+  - Total Return, Max Drawdown, Win Rate をパーセント表示（小数第2位）に統一。
+  - Sharpe Ratio を小数第2位まで表示。
+  - Total PnL をカンマ区切り表示。
+- **ツールチップ**:
+  - 各メトリクス（Short/Long Window, Return, Sharpe, MDD, Win Rate）にマウスオーバーで解説を表示する機能を追加。
+- **テーブル整形**:
+  - カラム名を直感的な名称（Short, Long, Total Return (%) 等）に変更。
 
 ## 実行方法
 1. `streamlit run dev_dashboard.py`
