@@ -292,6 +292,12 @@ def render_trades_tab():
     st.dataframe(trades_df, use_container_width=True)
 
 
+def render_pnl_tab():
+    """Temporary stub: PnL tab is not implemented yet."""
+    st.info("PnL tab (Profit & Loss) はまだ実装中です。今後のバージョンで有効になります。")
+
+
+
 # =============================================================================
 # Helper Functions
 # =============================================================================
