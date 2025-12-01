@@ -10,6 +10,7 @@ This is a *mock* / developer-facing dashboard, not the main user UI.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import pandas as pd
 import plotly.graph_objects as go
 import requests
