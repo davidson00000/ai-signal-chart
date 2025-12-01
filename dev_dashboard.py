@@ -431,9 +431,60 @@ def render_backtest_ui():
     commission = st.sidebar.number_input("Commission Rate", value=0.001, step=0.0001, format="%.4f")
     
     st.sidebar.subheader("Strategy Parameters (MA Cross)")
-    short_window = st.sidebar.number_input("Short Window", min_value=1, value=default_short)
-    long_window = st.sidebar.number_input("Long Window", min_value=1, value=default_long)
+    short_window = st.sidebar.number_input("Short Window", min_value=1, value=st.session_state.get("bt_short_window", 9), key="bt_short_window")
+    long_window = st.sidebar.number_input("Long Window", min_value=1, value=st.session_state.get("bt_long_window", 21), key="bt_long_window")
 
+    # ==========================================
+    # Main Area: Load from Strategy Library
+    # ==========================================
+    st.markdown("### 📚 Load from Strategy Library")
+    st.caption("Load saved strategy parameters from Strategy Lab")
+    
+    lib = StrategyLibrary()
+    strategies = lib.load_strategies()
+    
+    if strategies:
+        # Create display options
+        strategy_options = []
+        for s in strategies:
+            params = s.get("params", {})
+            metrics = s.get("metrics", {})
+            short = params.get("short_window", "?")
+            long = params.get("long_window", "?")
+            return_pct = metrics.get("return_pct", 0)
+            label = f"{s['name']} | {s['symbol']} {s['timeframe']} | MA({short},{long}) | Return: {return_pct:.2f}%"
+            strategy_options.append(label)
+        
+        col_select, col_load = st.columns([3, 1])
+        with col_select:
+            selected_idx = st.selectbox(
+                "Select Strategy",
+                options=range(len(strategies)),
+                format_func=lambda i: strategy_options[i],
+                key="bt_strategy_select"
+            )
+        
+        with col_load:
+            st.write("")  # Spacer
+            st.write("")  # Spacer
+            if st.button("📂 Load Parameters", key="bt_load_strategy_btn"):
+                selected_strategy = strategies[selected_idx]
+                params = selected_strategy.get("params", {})
+                
+                # Update session state
+                st.session_state["shared_symbol_preset"] = selected_strategy.get("symbol", "AAPL")
+                st.session_state["bt_short_window"] = params.get("short_window", 9)
+                st.session_state["bt_long_window"] = params.get("long_window", 21)
+                
+                st.success(f"✅ Loaded strategy: {selected_strategy['name']}")
+                st.info(f"**Parameters:** Symbol={selected_strategy.get('symbol')}, Timeframe={selected_strategy.get('timeframe')}, Short={params.get('short_window')}, Long={params.get('long_window')}")
+                st.rerun()
+    else:
+        st.info("No strategies saved yet. Go to Strategy Lab to save strategies from optimization results.")
+    
+    st.markdown("---")
+    
+    # --- Run Backtest Button ---
     # Input Form (for the submit button)
     with st.form("backtest_form"):
         st.markdown("---") # Separator for the button
