@@ -452,13 +452,38 @@ def render_strategy_lab():
         if strategy_type == "MA Cross":
             st.markdown("**Moving Average Crossover**")
             st.caption("Buy when Short MA crosses above Long MA. Sell when Short MA crosses below Long MA.")
-            col1, col2 = st.columns(2)
-            with col1:
-                short_window = st.number_input("Short Window", min_value=1, value=9)
-            with col2:
-                long_window = st.number_input("Long Window", min_value=1, value=21)
+            
+            tab_single, tab_opt = st.tabs(["Single Run", "Parameter Optimization"])
+            
+            with tab_single:
+                col1, col2 = st.columns(2)
+                with col1:
+                    short_window = st.number_input("Short Window", min_value=1, value=9)
+                with col2:
+                    long_window = st.number_input("Long Window", min_value=1, value=21)
+                
+                submitted_single = st.form_submit_button("🚀 Run Single Analysis")
+            
+            with tab_opt:
+                st.markdown("#### Grid Search Optimizer")
+                c1, c2, c3 = st.columns(3)
+                with c1:
+                    st.markdown("Short Window Range")
+                    short_min = st.number_input("Min", value=5, key="s_min")
+                    short_max = st.number_input("Max", value=20, key="s_max")
+                    short_step = st.number_input("Step", value=2, key="s_step")
+                with c2:
+                    st.markdown("Long Window Range")
+                    long_min = st.number_input("Min", value=20, key="l_min")
+                    long_max = st.number_input("Max", value=60, key="l_max")
+                    long_step = st.number_input("Step", value=5, key="l_step")
+                with c3:
+                    st.info("Total Combinations must be <= 400")
+                
+                submitted_opt = st.form_submit_button("🔍 Run Optimization")
 
         elif strategy_type == "RSI Reversal":
+            # ... (existing RSI code)
             st.markdown("**RSI Reversal**")
             st.caption("Buy when RSI crosses below Oversold. Sell when RSI crosses above Overbought.")
             col1, col2, col3 = st.columns(3)
@@ -468,8 +493,11 @@ def render_strategy_lab():
                 oversold = st.number_input("Oversold Level", min_value=1, max_value=49, value=30)
             with col3:
                 overbought = st.number_input("Overbought Level", min_value=51, max_value=99, value=70)
+            submitted_single = st.form_submit_button("🚀 Run Strategy Analysis")
+            submitted_opt = False
 
         elif strategy_type == "Breakout":
+            # ... (existing Breakout code)
             st.markdown("**Breakout Strategy**")
             st.caption("Buy when price breaks above N-period high. Sell when price breaks below N-period low.")
             col1, col2 = st.columns(2)
@@ -477,15 +505,15 @@ def render_strategy_lab():
                 lookback_window = st.number_input("Lookback Window", min_value=1, value=20)
             with col2:
                 threshold = st.number_input("Threshold Multiplier", min_value=1.0, value=1.0, step=0.1)
+            submitted_single = st.form_submit_button("🚀 Run Strategy Analysis")
+            submitted_opt = False
 
-        st.markdown("---")
-        submitted = st.form_submit_button("🚀 Run Strategy Analysis")
-
-    if submitted:
-        if strategy_type == "MA Cross":
-            # API Call for MA Cross
-            import requests
-
+    # Handle Actions
+    if strategy_type == "MA Cross":
+        import requests
+        
+        if submitted_single:
+            # API Call for MA Cross Single Run
             payload = {
                 "symbol": symbol,
                 "timeframe": timeframe,
@@ -548,16 +576,93 @@ def render_strategy_lab():
                     st.error(f"Backtest failed: {e}")
                     if e.response is not None:
                         st.error(f"Details: {e.response.text}")
+        
+        elif submitted_opt:
+            # API Call for Optimization
+            payload = {
+                "symbol": symbol,
+                "timeframe": timeframe,
+                "start_date": start_date.isoformat(),
+                "end_date": end_date.isoformat(),
+                "initial_capital": initial_capital,
+                "commission_rate": commission,
+                "short_min": short_min,
+                "short_max": short_max,
+                "short_step": short_step,
+                "long_min": long_min,
+                "long_max": long_max,
+                "long_step": long_step
+            }
+            
+            with st.spinner("Running Optimization..."):
+                try:
+                    response = requests.post("http://localhost:8000/optimize/ma_cross", json=payload)
+                    response.raise_for_status()
+                    data = response.json()
+                    
+                    st.success(f"Optimization Completed! Tested {data['total_combinations']} combinations.")
+                    
+                    top_results = data["top_results"]
+                    if not top_results:
+                        st.warning("No valid results found.")
+                    else:
+                        best = top_results[0]
+                        best_params = best["params"]
+                        best_metrics = best["metrics"]
+                        
+                        # Best Params Card
+                        st.markdown("### 🏆 Best Parameters")
+                        col1, col2, col3, col4 = st.columns(4)
+                        col1.metric("Short Window", best_params["short_window"])
+                        col2.metric("Long Window", best_params["long_window"])
+                        col3.metric("Total Return", f"{best_metrics['return_pct']:.2f}%")
+                        col4.metric("Sharpe Ratio", f"{best_metrics['sharpe_ratio']:.2f}")
+                        
+                        # Prepare Data for Visualization
+                        rows = []
+                        for r in top_results:
+                            row = r["params"].copy()
+                            row.update(r["metrics"])
+                            rows.append(row)
+                        df_results = pd.DataFrame(rows)
+                        
+                        # Heatmap
+                        st.subheader("🔥 Performance Heatmap")
+                        try:
+                            import altair as alt
+                            
+                            chart = alt.Chart(df_results).mark_rect().encode(
+                                x=alt.X('short_window:O', title='Short Window'),
+                                y=alt.Y('long_window:O', title='Long Window'),
+                                color=alt.Color('return_pct:Q', title='Return %', scale=alt.Scale(scheme='viridis')),
+                                tooltip=['short_window', 'long_window', 'return_pct', 'max_drawdown', 'trade_count']
+                            ).properties(
+                                title="Return % by Parameter Combination"
+                            )
+                            st.altair_chart(chart, use_container_width=True)
+                        except ImportError:
+                            st.warning("Altair not installed. Skipping heatmap.")
+                        except Exception as e:
+                            st.warning(f"Could not render heatmap: {e}")
+                            
+                        # Results Table
+                        st.subheader("📊 Top Results")
+                        st.dataframe(df_results, use_container_width=True)
+                        
+                except requests.exceptions.RequestException as e:
+                    st.error(f"Optimization failed: {e}")
+                    if e.response is not None:
+                        st.error(f"Details: {e.response.text}")
 
-        else:
-            # Placeholder for other strategies
-            st.info(f"**{strategy_type}** selected.")
-            st.warning("この戦略タイプの自動バックテストは v0.3 以降で実装予定です。")
-            st.write("Parameters captured (for future use):")
-            if strategy_type == "RSI Reversal":
-                st.json({"rsi_period": rsi_period, "oversold": oversold, "overbought": overbought})
-            elif strategy_type == "Breakout":
-                st.json({"lookback_window": lookback_window, "threshold": threshold})
+    elif submitted_single: # For other strategies
+        # Placeholder for other strategies
+        st.info(f"**{strategy_type}** selected.")
+        st.warning("この戦略タイプの自動バックテストは v0.3 以降で実装予定です。")
+        st.write("Parameters captured (for future use):")
+        if strategy_type == "RSI Reversal":
+            st.json({"rsi_period": rsi_period, "oversold": oversold, "overbought": overbought})
+        elif strategy_type == "Breakout":
+            st.json({"lookback_window": lookback_window, "threshold": threshold})
 
 
 # =============================================================================

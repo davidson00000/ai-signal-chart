@@ -54,3 +54,24 @@ class OptimizationResponse(BaseModel):
     strategy_type: str = Field(..., description="Strategy type")
     total_combinations: int = Field(..., description="Total combinations tested")
     top_results: List[Dict[str, Any]] = Field(..., description="Top optimization results")
+
+
+class MACrossOptimizationRequest(BaseModel):
+    """Request model specifically for MA Cross optimization"""
+    
+    symbol: str = Field(..., description="Symbol to optimize")
+    timeframe: str = Field(default="1d", description="Timeframe")
+    start_date: Optional[str] = Field(default=None, description="Start date (YYYY-MM-DD)")
+    end_date: Optional[str] = Field(default=None, description="End date (YYYY-MM-DD)")
+    
+    initial_capital: float = Field(default=1000000, description="Initial capital")
+    commission_rate: float = Field(default=0.001, description="Commission rate")
+    
+    # Grid Search Ranges
+    short_min: int = Field(default=5, description="Min short window")
+    short_max: int = Field(default=20, description="Max short window")
+    short_step: int = Field(default=1, description="Short window step")
+    
+    long_min: int = Field(default=20, description="Min long window")
+    long_max: int = Field(default=60, description="Max long window")
+    long_step: int = Field(default=5, description="Long window step")

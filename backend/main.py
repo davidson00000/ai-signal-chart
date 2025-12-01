@@ -17,7 +17,11 @@ from backend.models.backtest import (
     EquityCurvePoint,
     TradeSummary,
 )
-from backend.models.optimization import OptimizationRequest, OptimizationResponse
+from backend.models.optimization import (
+    OptimizationRequest, 
+    OptimizationResponse,
+    MACrossOptimizationRequest
+)
 from backend.models.strategy_lab import (
     StrategyLabBatchRequest,
     StrategyLabBatchResponse,
@@ -263,6 +267,8 @@ def simulate_backtest(request: BacktestRequest) -> BacktestResponse:
 
         return response
 
+        return response
+
     except HTTPException:
         # Re-raise HTTP exceptions
         raise
@@ -272,6 +278,66 @@ def simulate_backtest(request: BacktestRequest) -> BacktestResponse:
             status_code=400,
             detail=f"Data fetching or strategy execution failed: {e}",
         )
+
+
+@app.post("/optimize/ma_cross", response_model=OptimizationResponse)
+async def optimize_ma_cross(request: MACrossOptimizationRequest) -> OptimizationResponse:
+    """
+    MA Cross 戦略専用のグリッドサーチ最適化エンドポイント
+    """
+    try:
+        from backend.optimizer import GridSearchOptimizer
+        
+        # 組み合わせ数の概算チェック
+        short_count = (request.short_max - request.short_min) // request.short_step + 1
+        long_count = (request.long_max - request.long_min) // request.long_step + 1
+        total_combinations = short_count * long_count
+        
+        if total_combinations > 400:
+             raise HTTPException(
+                status_code=422, 
+                detail=f"Too many combinations: {total_combinations}. Limit is 400."
+            )
+
+        optimizer = GridSearchOptimizer()
+        
+        # Build parameter grid
+        param_grid = {
+            "short_window": list(range(request.short_min, request.short_max + 1, request.short_step)),
+            "long_window": list(range(request.long_min, request.long_max + 1, request.long_step))
+        }
+        
+        # Run optimization
+        results = optimizer.optimize(
+            symbol=request.symbol,
+            timeframe=request.timeframe,
+            start_date=request.start_date,
+            end_date=request.end_date,
+            param_grid=param_grid,
+            initial_capital=request.initial_capital,
+            commission_rate=request.commission_rate,
+            position_size=1.0,
+            strategy_type="ma_cross"
+        )
+        
+        return OptimizationResponse(
+            symbol=request.symbol,
+            timeframe=request.timeframe,
+            strategy_type="ma_cross",
+            total_combinations=len(results),
+            top_results=[
+                {
+                    "rank": i + 1,
+                    **r.to_dict()
+                }
+                for i, r in enumerate(results)
+            ]
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Optimization failed: {str(e)}")
 
 
 @app.post("/optimize", response_model=OptimizationResponse)
