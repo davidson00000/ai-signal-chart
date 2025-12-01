@@ -574,12 +574,27 @@ def render_strategy_lab():
     st.title("🧪 Strategy Lab")
     st.caption("Design and test algorithmic strategies.")
 
+    # Check if a strategy was loaded
+    loaded_strategy = st.session_state.get("strategy_lab_loaded_strategy")
+    
     # Common Inputs
     with st.expander("📊 Market Data & Capital Settings", expanded=True):
         col1, col2, col3 = st.columns(3)
         with col1:
+            # Use loaded strategy values as defaults
+            symbol_default = loaded_strategy.get("symbol", "AAPL") if loaded_strategy else "AAPL"
+            # Update shared symbol preset if loaded
+            if loaded_strategy and "symbol" in loaded_strategy:
+                st.session_state["shared_symbol_preset"] = symbol_default
+            
             symbol = render_symbol_selector(key_prefix="sl", container=col1)
-            timeframe = st.selectbox("Timeframe", options=["1d", "1h", "5m"], index=0, key="sl_timeframe")
+            
+            # Timeframe with loaded strategy default
+            timeframe_options = ["1d", "1h", "5m"]
+            timeframe_default = loaded_strategy.get("timeframe", "1d") if loaded_strategy else "1d"
+            timeframe_index = timeframe_options.index(timeframe_default) if timeframe_default in timeframe_options else 0
+            
+            timeframe = st.selectbox("Timeframe", options=timeframe_options, index=timeframe_index, key="sl_timeframe")
         with col2:
             start_date = st.date_input("Start Date", value=datetime(2020, 1, 1), key="sl_start")
             end_date = st.date_input("End Date", value=datetime(2023, 12, 31), key="sl_end")
@@ -600,9 +615,15 @@ def render_strategy_lab():
 
     # Dynamic Form based on selection
     with st.form("strategy_form"):
-        # Default values for params
-        short_window = 9
-        long_window = 21
+        # Default values for params - use loaded strategy if available
+        if loaded_strategy and loaded_strategy.get("params"):
+            params = loaded_strategy.get("params", {})
+            short_window_default = params.get("short_window", 9)
+            long_window_default = params.get("long_window", 21)
+        else:
+            short_window_default = 9
+            long_window_default = 21
+            
         rsi_period = 14
         oversold = 30
         overbought = 70
@@ -618,9 +639,9 @@ def render_strategy_lab():
             with tab_single:
                 col1, col2 = st.columns(2)
                 with col1:
-                    short_window = st.number_input("Short Window", min_value=1, value=9)
+                    short_window = st.number_input("Short Window", min_value=1, max_value=200, value=short_window_default, key="sl_short_single")
                 with col2:
-                    long_window = st.number_input("Long Window", min_value=1, value=21)
+                    long_window = st.number_input("Long Window", min_value=1, max_value=400, value=long_window_default, key="sl_long_single")
                 
                 submitted_single = st.form_submit_button("🚀 Run Single Analysis")
             
@@ -1015,22 +1036,15 @@ def render_strategy_lab():
                 key="strat_selector"
             )
         with col_load2:
-            st.write("") # Spacer
-            st.write("") # Spacer
-            if st.button("📂 Load Strategy"):
-                # Find selected strategy
+            st.write("")  # Spacer
+            if st.button("📂 Load Strategy", key="sl_load_strategy_button"):
                 selected_strat = next((s for s in strategies if s["name"] == selected_strat_name), None)
                 if selected_strat:
-                    # Update Session State for Strategy Lab
-                    st.session_state["sl_symbol"] = selected_strat["symbol"]
-                    st.session_state["sl_timeframe"] = selected_strat["timeframe"]
-                    
-                    # Store for Backtest Lab
-                    st.session_state["loaded_strategy"] = selected_strat
-                    
-                    st.success(f"Loaded '{selected_strat_name}'. Please check parameters.")
-                    st.info(f"**Loaded Parameters:** Short={selected_strat['params']['short_window']}, Long={selected_strat['params']['long_window']}")
-                    st.caption("Go to 'Backtest Lab' to use these parameters instantly.")
+                    # Save loaded strategy to separate session state key
+                    # Don't directly modify widget keys (st_l_*) to avoid StreamlitAPIException
+                    st.session_state["strategy_lab_loaded_strategy"] = selected_strat
+                    st.success(f"Loaded '{selected_strat_name}'. Parameters will be applied on next render.")
+                    st.rerun()
 
     # ==========================================
     # Symbol Preset Settings (Developer Tools)
