@@ -402,17 +402,32 @@ def render_backtest_ui():
 
 
 # =============================================================================
-# Strategy Lab (v0.1)
+# Strategy Lab (v0.2)
 # =============================================================================
 
 
 def render_strategy_lab():
     """
-    Render the Strategy Lab UI (v0.1).
-    Allows users to select strategy templates and input parameters.
+    Render the Strategy Lab UI (v0.2).
+    Allows users to select strategy templates, input parameters, and run backtests (MA Cross only).
     """
     st.title("🧪 Strategy Lab")
     st.caption("Design and test algorithmic strategies.")
+
+    # Common Inputs
+    with st.expander("📊 Market Data & Capital Settings", expanded=True):
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            symbol = st.text_input("Symbol", value="AAPL", key="sl_symbol")
+            timeframe = st.selectbox("Timeframe", options=["1d", "1h", "5m"], index=0, key="sl_timeframe")
+        with col2:
+            start_date = st.date_input("Start Date", value=datetime(2020, 1, 1), key="sl_start")
+            end_date = st.date_input("End Date", value=datetime(2023, 12, 31), key="sl_end")
+        with col3:
+            initial_capital = st.number_input("Initial Capital", value=1_000_000, step=100_000, key="sl_capital")
+            commission = st.number_input("Commission Rate", value=0.001, step=0.0001, format="%.4f", key="sl_comm")
+
+    st.markdown("---")
 
     # Strategy Selection
     strategy_type = st.selectbox(
@@ -421,11 +436,19 @@ def render_strategy_lab():
         index=0
     )
 
-    st.markdown("---")
     st.subheader("Strategy Parameters")
 
     # Dynamic Form based on selection
     with st.form("strategy_form"):
+        # Default values for params
+        short_window = 9
+        long_window = 21
+        rsi_period = 14
+        oversold = 30
+        overbought = 70
+        lookback_window = 20
+        threshold = 1.0
+
         if strategy_type == "MA Cross":
             st.markdown("**Moving Average Crossover**")
             st.caption("Buy when Short MA crosses above Long MA. Sell when Short MA crosses below Long MA.")
@@ -459,14 +482,82 @@ def render_strategy_lab():
         submitted = st.form_submit_button("🚀 Run Strategy Analysis")
 
     if submitted:
-        st.info(f"**{strategy_type}** selected. (v0.1 のため実行機能は未実装です)")
-        st.write("Parameters captured:")
         if strategy_type == "MA Cross":
-            st.json({"short_window": short_window, "long_window": long_window})
-        elif strategy_type == "RSI Reversal":
-            st.json({"rsi_period": rsi_period, "oversold": oversold, "overbought": overbought})
-        elif strategy_type == "Breakout":
-            st.json({"lookback_window": lookback_window, "threshold": threshold})
+            # API Call for MA Cross
+            import requests
+
+            payload = {
+                "symbol": symbol,
+                "timeframe": timeframe,
+                "start_date": start_date.isoformat(),
+                "end_date": end_date.isoformat(),
+                "initial_capital": initial_capital,
+                "commission_rate": commission,
+                "position_size": 1.0,
+                "strategy": "ma_cross",
+                "short_window": short_window,
+                "long_window": long_window,
+            }
+
+            with st.spinner("Running MA Cross Backtest..."):
+                try:
+                    response = requests.post("http://localhost:8000/simulate", json=payload)
+                    response.raise_for_status()
+                    result = response.json()
+
+                    st.success("Analysis Completed!")
+
+                    # Metrics
+                    metrics = result["metrics"]
+                    m1, m2, m3, m4 = st.columns(4)
+                    m1.metric("Total Return", f"{metrics['return_pct']:.2f}%")
+                    m2.metric("Win Rate", f"{metrics['win_rate'] * 100:.1f}%")
+                    m3.metric("Max Drawdown", f"{metrics['max_drawdown'] * 100:.2f}%")
+                    m4.metric("Trades", metrics["trade_count"])
+
+                    # Equity Curve
+                    st.subheader("Equity Curve")
+                    equity_data = result["equity_curve"]
+                    if equity_data:
+                        df_equity = pd.DataFrame(equity_data)
+                        df_equity["date"] = pd.to_datetime(df_equity["date"])
+                        df_equity.set_index("date", inplace=True)
+                        st.line_chart(df_equity["equity"])
+                    else:
+                        st.warning("No equity data returned.")
+
+                    # Trades Table
+                    st.subheader("Trade History")
+                    trades_data = result["trades"]
+                    if trades_data:
+                        df_trades = pd.DataFrame(trades_data)
+                        st.dataframe(df_trades, use_container_width=True)
+
+                        # CSV Download
+                        csv = df_trades.to_csv(index=False).encode('utf-8')
+                        st.download_button(
+                            label="📥 Download Trades CSV",
+                            data=csv,
+                            file_name=f"strategy_lab_trades_{symbol}.csv",
+                            mime="text/csv",
+                        )
+                    else:
+                        st.info("No trades executed.")
+
+                except requests.exceptions.RequestException as e:
+                    st.error(f"Backtest failed: {e}")
+                    if e.response is not None:
+                        st.error(f"Details: {e.response.text}")
+
+        else:
+            # Placeholder for other strategies
+            st.info(f"**{strategy_type}** selected.")
+            st.warning("この戦略タイプの自動バックテストは v0.3 以降で実装予定です。")
+            st.write("Parameters captured (for future use):")
+            if strategy_type == "RSI Reversal":
+                st.json({"rsi_period": rsi_period, "oversold": oversold, "overbought": overbought})
+            elif strategy_type == "Breakout":
+                st.json({"lookback_window": lookback_window, "threshold": threshold})
 
 
 # =============================================================================
