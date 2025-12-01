@@ -27,6 +27,12 @@ import streamlit as st
 
 
 # =============================================================================
+# Configuration
+# =============================================================================
+BACKEND_URL = "http://localhost:8000"
+
+
+# =============================================================================
 # Symbol Preset Management
 # =============================================================================
 
@@ -431,9 +437,8 @@ def render_backtest_ui():
     commission = st.sidebar.number_input("Commission Rate", value=0.001, step=0.0001, format="%.4f")
     
     st.sidebar.subheader("Strategy Parameters (MA Cross)")
-    short_window = st.sidebar.number_input("Short Window", min_value=1, value=st.session_state.get("bt_short_window", 9), key="bt_short_window")
-    long_window = st.sidebar.number_input("Long Window", min_value=1, value=st.session_state.get("bt_long_window", 21), key="bt_long_window")
-
+    # Widgets will be created AFTER the load logic to avoid StreamlitAPIException
+    
     # ==========================================
     # Main Area: Load from Strategy Library
     # ==========================================
@@ -483,6 +488,10 @@ def render_backtest_ui():
         st.info("No strategies saved yet. Go to Strategy Lab to save strategies from optimization results.")
     
     st.markdown("---")
+
+    # Create Sidebar Widgets NOW (after potential session_state updates)
+    short_window = st.sidebar.number_input("Short Window", min_value=1, value=st.session_state.get("bt_short_window", 9), key="bt_short_window")
+    long_window = st.sidebar.number_input("Long Window", min_value=1, value=st.session_state.get("bt_long_window", 21), key="bt_long_window")
     
     # ==========================================
     # Loaded Strategy Info Display
@@ -616,17 +625,18 @@ Comparing multiple strategies with the same symbol, timeframe, and date range.
                             # Create comparison table
                             comparison_data = []
                             for cr in comparison_results:
+                                metrics = cr['result']['metrics']
                                 row = {
                                     "Name": cr["name"],
                                     "Symbol": cr["strategy"]["symbol"],
                                     "Timeframe": cr["strategy"]["timeframe"],
                                     "Short": cr["strategy"]["params"].get("short_window"),
                                     "Long": cr["strategy"]["params"].get("long_window"),
-                                    "Return (%)": f"{cr['result']['total_return_pct']:.2f}",
-                                    "Max DD (%)": f"{cr['result']['max_drawdown_pct']:.2f}",
-                                    "Sharpe": f"{cr['result']['sharpe_ratio']:.2f}",
-                                    "Win Rate (%)": f"{cr['result']['win_rate'] * 100:.2f}",
-                                    "Trades": cr['result']['trade_count']
+                                    "Return (%)": f"{metrics['return_pct']:.2f}",
+                                    "Max DD (%)": f"{metrics['max_drawdown'] * 100:.2f}",
+                                    "Sharpe": f"{metrics['sharpe_ratio']:.2f}",
+                                    "Win Rate (%)": f"{metrics['win_rate'] * 100:.2f}",
+                                    "Trades": metrics['trade_count']
                                 }
                                 comparison_data.append(row)
                             
@@ -882,6 +892,47 @@ def render_strategy_lab():
             with col2:
                 threshold = st.number_input("Threshold Multiplier", min_value=1.0, value=1.0, step=0.1)
             submitted_single = st.form_submit_button("🚀 Run Strategy Analysis")
+            if submitted_single:
+                # Run single backtest
+                import requests
+                
+                payload = {
+                    "symbol": symbol,
+                    "timeframe": timeframe,
+                    "start_date": start_date.isoformat(),
+                    "end_date": end_date.isoformat(),
+                    "initial_capital": initial_capital,
+                    "commission": commission,
+                    "short_window": int(short_window),
+                    "long_window": int(long_window),
+                }
+                
+                try:
+                    with st.spinner("Running backtest..."):
+                        response = requests.post(f"{BACKEND_URL}/simulate", json=payload, timeout=30)
+                        response.raise_for_status()
+                        result = response.json()
+                    
+                    # Display results
+                    st.success("✅ Backtest completed!")
+                    
+                    col_r1, col_r2, col_r3 = st.columns(3)
+                    with col_r1:
+                        st.metric("Total Return", f"{result['total_return_pct']:.2f}%")
+                    with col_r2:
+                        st.metric("Sharpe Ratio", f"{result['sharpe_ratio']:.2f}")
+                    with col_r3:
+                        st.metric("Max Drawdown", f"{result['max_drawdown_pct']:.2f}%")
+                    
+                    # Equity Curve
+                    if "equity_curve" in result and result["equity_curve"]:
+                        equity_df = pd.DataFrame(result["equity_curve"])
+                        df_equity = equity_df.copy()
+                        df_equity["date"] = pd.to_datetime(df_equity["date"])
+                        df_equity.set_index("date", inplace=True)
+                        st.line_chart(df_equity["equity"])
+                except requests.exceptions.RequestException as e:
+                    st.error(f"Backtest failed: {e}")
             submitted_opt = False
 
     # Handle Actions
