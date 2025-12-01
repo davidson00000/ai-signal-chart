@@ -515,6 +515,170 @@ def render_backtest_ui():
             
             st.markdown("---")
     
+    # ==========================================
+    # Strategy Comparison Section
+    # ==========================================
+    st.markdown("### 📊 Strategy Comparison")
+    st.caption("Compare multiple saved strategies with the same conditions")
+    
+    if not strategies or len(strategies) < 2:
+        st.info("Need at least 2 saved strategies to run comparison. Go to Strategy Lab to save more strategies.")
+    else:
+        # Create selection options
+        strategy_options = []
+        strategy_map = {}
+        for s in strategies:
+            params = s.get("params", {})
+            metrics = s.get("metrics", {})
+            short = params.get("short_window", "?")
+            long = params.get("long_window", "?")
+            return_pct = metrics.get("return_pct", 0)
+            label = f"{s['name']} | {s['symbol']} {s['timeframe']} | MA({short},{long}) | Return: {return_pct:.2f}%"
+            strategy_options.append(label)
+            strategy_map[label] = s
+        
+        # Multi-select for strategy selection
+        selected_labels = st.multiselect(
+            "Select Strategies to Compare (2 or more)",
+            options=strategy_options,
+            key="comparison_strategy_select"
+        )
+        
+        selected_strategies = [strategy_map[label] for label in selected_labels]
+        
+        # Run Comparison Button
+        col_comp1, col_comp2 = st.columns([1, 3])
+        with col_comp1:
+            run_comparison = st.button("🔬 Run Comparison", key="run_comparison_btn")
+        
+        # Validation and Execution
+        if run_comparison:
+            if len(selected_strategies) < 2:
+                st.warning("Please select at least 2 strategies to compare.")
+            else:
+                # Validate strategies have same symbol and timeframe
+                symbols = set(s["symbol"] for s in selected_strategies)
+                timeframes = set(s["timeframe"] for s in selected_strategies)
+                
+                if len(symbols) > 1:
+                    st.error(f"❌ All strategies must use the same symbol. Selected symbols: {', '.join(symbols)}")
+                elif len(timeframes) > 1:
+                    st.error(f"❌ All strategies must use the same timeframe. Selected timeframes: {', '.join(timeframes)}")
+                else:
+                    # Valid - run comparison
+                    st.success(f"✅ Comparing {len(selected_strategies)} strategies with {list(symbols)[0]} / {list(timeframes)[0]}")
+                    
+                    with st.spinner("Running comparisons..."):
+                        comparison_results = []
+                        
+                        for strategy in selected_strategies:
+                            import requests
+                            
+                            params = strategy.get("params", {})
+                            payload = {
+                                "symbol": strategy["symbol"],
+                                "timeframe": strategy["timeframe"],
+                                "start_date": start_date.isoformat(),
+                                "end_date": end_date.isoformat(),
+                                "initial_capital": initial_capital,
+                                "commission": commission,
+                                "short_window": params.get("short_window", 9),
+                                "long_window": params.get("long_window", 21),
+                            }
+                            
+                            try:
+                                response = requests.post(f"{BACKEND_URL}/simulate", json=payload, timeout=30)
+                                response.raise_for_status()
+                                result = response.json()
+                                
+                                comparison_results.append({
+                                    "name": strategy["name"],
+                                    "strategy": strategy,
+                                    "result": result
+                                })
+                            except requests.exceptions.RequestException as e:
+                                st.error(f"Failed to run backtest for '{strategy['name']}': {e}")
+                        
+                        # Display results if we have any successful runs
+                        if comparison_results:
+                            st.markdown("---")
+                            st.markdown("#### 📈 Comparison Results")
+                            
+                            st.info("""
+**Strategy Comparison**  
+Comparing multiple strategies with the same symbol, timeframe, and date range.
+- **Return (%)**: (Final Equity / Initial Capital - 1) × 100
+- **Max Drawdown (%)**: Maximum peak-to-trough decline
+- **Sharpe Ratio**: Risk-adjusted return measure
+- **Win Rate (%)**: Percentage of profitable trades
+                            """)
+                            
+                            # Create comparison table
+                            comparison_data = []
+                            for cr in comparison_results:
+                                row = {
+                                    "Name": cr["name"],
+                                    "Symbol": cr["strategy"]["symbol"],
+                                    "Timeframe": cr["strategy"]["timeframe"],
+                                    "Short": cr["strategy"]["params"].get("short_window"),
+                                    "Long": cr["strategy"]["params"].get("long_window"),
+                                    "Return (%)": f"{cr['result']['total_return_pct']:.2f}",
+                                    "Max DD (%)": f"{cr['result']['max_drawdown_pct']:.2f}",
+                                    "Sharpe": f"{cr['result']['sharpe_ratio']:.2f}",
+                                    "Win Rate (%)": f"{cr['result']['win_rate'] * 100:.2f}",
+                                    "Trades": cr['result']['trade_count']
+                                }
+                                comparison_data.append(row)
+                            
+                            df_comparison = pd.DataFrame(comparison_data)
+                            
+                            # Highlight best return
+                            st.markdown("##### Comparison Table")
+                            st.dataframe(df_comparison, use_container_width=True)
+                            
+                            # Find and display best performer
+                            best_idx = df_comparison["Return (%)"].astype(float).idxmax()
+                            best_name = df_comparison.loc[best_idx, "Name"]
+                            best_return = df_comparison.loc[best_idx, "Return (%)"]
+                            st.success(f"🏆 Best Performer: **{best_name}** with {best_return}% return")
+                            
+                            # Equity Curve Overlay Chart
+                            st.markdown("##### Equity Curve Comparison")
+                            
+                            # Prepare data for overlay
+                            equity_data = []
+                            for cr in comparison_results:
+                                equity_curve = cr["result"].get("equity_curve", [])
+                                for point in equity_curve:
+                                    equity_data.append({
+                                        "date": point["date"],
+                                        "equity": point["equity"],
+                                        "strategy": cr["name"]
+                                    })
+                            
+                            if equity_data:
+                                import altair as alt
+                                
+                                df_equity = pd.DataFrame(equity_data)
+                                df_equity['date'] = pd.to_datetime(df_equity['date'])
+                                
+                                # Create Altair chart
+                                chart = alt.Chart(df_equity).mark_line().encode(
+                                    x=alt.X('date:T', title='Date'),
+                                    y=alt.Y('equity:Q', title='Equity'),
+                                    color=alt.Color('strategy:N', title='Strategy'),
+                                    tooltip=['date:T', 'equity:Q', 'strategy:N']
+                                ).properties(
+                                    height=400,
+                                    title='Equity Curve Comparison'
+                                ).interactive()
+                                
+                                st.altair_chart(chart, use_container_width=True)
+                            else:
+                                st.warning("No equity curve data available for comparison.")
+    
+    st.markdown("---")
+    
     # --- Run Backtest Button ---
     # Input Form (for the submit button)
     with st.form("backtest_form"):
