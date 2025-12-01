@@ -19,10 +19,44 @@ import uuid
 import os
 import json
 from typing import Any, Dict, List, Tuple
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import streamlit as st
+
+
+# =============================================================================
+# Symbol Preset Management
+# =============================================================================
+
+SYMBOL_PRESET_PATH = Path("data/symbol_presets.json")
+
+def load_symbol_presets() -> List[Dict[str, str]]:
+    """Load symbol presets from JSON file."""
+    if not SYMBOL_PRESET_PATH.exists():
+        # Return default if file doesn't exist
+        return [
+            {"symbol": "AAPL", "label": "Apple"},
+            {"symbol": "MSFT", "label": "Microsoft"},
+            {"symbol": "TSLA", "label": "Tesla"},
+        ]
+    try:
+        with SYMBOL_PRESET_PATH.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data.get("symbols", [])
+    except Exception as e:
+        st.error(f"Failed to load symbol presets: {e}")
+        return [{"symbol": "AAPL", "label": "Apple"}]
+
+def save_symbol_presets(symbols: List[Dict[str, str]]) -> None:
+    """Save symbol presets to JSON file."""
+    try:
+        SYMBOL_PRESET_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with SYMBOL_PRESET_PATH.open("w", encoding="utf-8") as f:
+            json.dump({"symbols": symbols}, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        st.error(f"Failed to save symbol presets: {e}")
 
 
 # =============================================================================
@@ -305,38 +339,22 @@ def render_pnl_tab():
 def render_symbol_selector(key_prefix: str = "sl", container: Any = st) -> str:
     """
     Renders a symbol selector with presets and custom input.
-    Synchronizes state via session_state using a shared key if desired, 
-    but for independent tabs we might want distinct keys or shared.
-    User requested shared state: "Backtest Lab and Strategy Lab で共通の状態を使ってよい"
-    
-    We will use a shared session state key 'shared_symbol_preset' and 'shared_custom_symbol'
-    to synchronize across tabs.
+    Loads presets from data/symbol_presets.json.
     """
-    SYMBOL_PRESETS = [
-        "AAPL", "MSFT", "TSLA", "GOOGL", "AMZN", 
-        "SPY", "BTC-USD", "USDJPY=X", "Custom..."
-    ]
+    # Load presets from JSON
+    presets = load_symbol_presets()
+    SYMBOL_PRESETS = [p["symbol"] for p in presets] + ["Custom..."]
     
     # Initialize shared state if not present
     if "shared_symbol_preset" not in st.session_state:
-        st.session_state["shared_symbol_preset"] = "AAPL"
+        st.session_state["shared_symbol_preset"] = SYMBOL_PRESETS[0] if SYMBOL_PRESETS else "AAPL"
     if "shared_custom_symbol" not in st.session_state:
         st.session_state["shared_custom_symbol"] = ""
 
-    # Selectbox for Presets
-    # We use a unique key for the widget to avoid duplicate ID errors if rendered multiple times,
-    # but we sync it with the shared state.
-    
-    # Actually, to sync perfectly, we should use the shared key as the widget key?
-    # No, Streamlit doesn't allow same key in different widgets.
-    # So we use a callback or just read/write to shared state.
-    
-    # Let's try reading from shared state for default, and updating shared state on change.
-    
     current_preset = st.session_state["shared_symbol_preset"]
     if current_preset not in SYMBOL_PRESETS:
         current_preset = "Custom..." # Fallback if loaded symbol is not in presets
-        st.session_state["shared_custom_symbol"] = st.session_state.get("sl_symbol", "AAPL") # Try to preserve value
+        st.session_state["shared_custom_symbol"] = st.session_state.get("sl_symbol", SYMBOL_PRESETS[0] if SYMBOL_PRESETS else "AAPL")
 
     def on_preset_change():
         st.session_state["shared_symbol_preset"] = st.session_state[f"{key_prefix}_preset_select"]
@@ -363,7 +381,7 @@ def render_symbol_selector(key_prefix: str = "sl", container: Any = st) -> str:
             placeholder="例: 7203.T (トヨタ), 9984.T (ソフトバンクG) など",
             on_change=on_custom_change
         )
-        effective_symbol = custom_symbol.strip() or "AAPL"
+        effective_symbol = custom_symbol.strip() or (SYMBOL_PRESETS[0] if SYMBOL_PRESETS else "AAPL")
     
     return effective_symbol
 
@@ -488,6 +506,8 @@ def render_backtest_ui():
                 st.error(f"Backtest failed: {e}")
                 if e.response is not None:
                     st.error(f"Details: {e.response.text}")
+
+
 
 
 # =============================================================================
@@ -958,14 +978,63 @@ def render_strategy_lab():
                     st.session_state["loaded_strategy"] = selected_strat
                     
                     st.success(f"Loaded '{selected_strat_name}'. Please check parameters.")
-                    # Note: We can't easily update the number_input widgets directly if they are already rendered.
-                    # But we can set session state if keys are used.
-                    # Currently number_inputs don't have keys for params. 
-                    # We will rely on the user seeing the loaded info or we need to refactor inputs to use keys.
-                    # For v0.1, let's show the loaded params clearly.
-                    
                     st.info(f"**Loaded Parameters:** Short={selected_strat['params']['short_window']}, Long={selected_strat['params']['long_window']}")
                     st.caption("Go to 'Backtest Lab' to use these parameters instantly.")
+
+    # ==========================================
+    # Symbol Preset Settings (Developer Tools)
+    # ==========================================
+    st.markdown("---")
+    with st.expander("⚙️ Symbol Preset Settings (開発者向け)", expanded=False):
+        st.markdown("### Current Presets")
+        symbols = load_symbol_presets()
+
+        if symbols:
+            df = pd.DataFrame(symbols)
+            st.dataframe(df, use_container_width=True)
+        else:
+            st.info("No symbol presets found.")
+
+        st.markdown("### Add New Preset")
+        col_add1, col_add2 = st.columns(2)
+        with col_add1:
+            new_symbol = st.text_input("Symbol", key="new_symbol_input", placeholder="例: NVDA, 7203.T")
+        with col_add2:
+            new_label = st.text_input("Label (optional)", key="new_symbol_label", placeholder="例: NVIDIA")
+
+        if st.button("➕ Add Preset"):
+            new_symbol_val = new_symbol.strip().upper()
+            if not new_symbol_val:
+                st.warning("Symbol cannot be empty.")
+            elif any(s["symbol"] == new_symbol_val for s in symbols):
+                st.warning(f"Symbol '{new_symbol_val}' already exists in presets.")
+            else:
+                new_entry = {
+                    "symbol": new_symbol_val,
+                    "label": new_label.strip() or new_symbol_val
+                }
+                symbols.append(new_entry)
+                save_symbol_presets(symbols)
+                st.success(f"✅ Added preset: {new_symbol_val}")
+                st.rerun()
+
+        st.markdown("### Delete Preset")
+        if symbols:
+            delete_target = st.selectbox(
+                "Select symbol to delete",
+                options=[s["symbol"] for s in symbols],
+                key="delete_symbol_select"
+            )
+            if st.button("🗑️ Delete Preset"):
+                updated = [s for s in symbols if s["symbol"] != delete_target]
+                if not updated:
+                    st.warning("少なくとも1件のシンボルは残してください。")
+                else:
+                    save_symbol_presets(updated)
+                    st.success(f"✅ Deleted preset: {delete_target}")
+                    st.rerun()
+        else:
+            st.info("No presets to delete.")
 
 
 class StrategyLibrary:

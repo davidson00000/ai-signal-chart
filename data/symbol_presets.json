@@ -1,0 +1,36 @@
+{
+    "symbols": [
+        {
+            "symbol": "AAPL",
+            "label": "Apple"
+        },
+        {
+            "symbol": "MSFT",
+            "label": "Microsoft"
+        },
+        {
+            "symbol": "TSLA",
+            "label": "Tesla"
+        },
+        {
+            "symbol": "GOOGL",
+            "label": "Alphabet"
+        },
+        {
+            "symbol": "AMZN",
+            "label": "Amazon"
+        },
+        {
+            "symbol": "SPY",
+            "label": "S&P500 ETF"
+        },
+        {
+            "symbol": "BTC-USD",
+            "label": "Bitcoin (USD)"
+        },
+        {
+            "symbol": "USDJPY=X",
+            "label": "USD/JPY FX"
+        }
+    ]
+}
