@@ -292,15 +292,74 @@ def render_trades_tab():
     st.dataframe(trades_df, use_container_width=True)
 
 
-def render_pnl_tab():
-    st.subheader("Equity Curve (Mock)")
-    df = st.session_state.get("chart_data")
-    if df is None or df.empty:
-        st.info("No P&L yet.")
-        return
+# =============================================================================
+# Helper Functions
+# =============================================================================
 
-    pnl_df = generate_mock_pnl(df)
-    st.line_chart(pnl_df)
+def render_symbol_selector(key_prefix: str = "sl") -> str:
+    """
+    Renders a symbol selector with presets and custom input.
+    Synchronizes state via session_state using a shared key if desired, 
+    but for independent tabs we might want distinct keys or shared.
+    User requested shared state: "Backtest Lab and Strategy Lab で共通の状態を使ってよい"
+    
+    We will use a shared session state key 'shared_symbol_preset' and 'shared_custom_symbol'
+    to synchronize across tabs.
+    """
+    SYMBOL_PRESETS = [
+        "AAPL", "MSFT", "TSLA", "GOOGL", "AMZN", 
+        "SPY", "BTC-USD", "USDJPY=X", "Custom..."
+    ]
+    
+    # Initialize shared state if not present
+    if "shared_symbol_preset" not in st.session_state:
+        st.session_state["shared_symbol_preset"] = "AAPL"
+    if "shared_custom_symbol" not in st.session_state:
+        st.session_state["shared_custom_symbol"] = ""
+
+    # Selectbox for Presets
+    # We use a unique key for the widget to avoid duplicate ID errors if rendered multiple times,
+    # but we sync it with the shared state.
+    
+    # Actually, to sync perfectly, we should use the shared key as the widget key?
+    # No, Streamlit doesn't allow same key in different widgets.
+    # So we use a callback or just read/write to shared state.
+    
+    # Let's try reading from shared state for default, and updating shared state on change.
+    
+    current_preset = st.session_state["shared_symbol_preset"]
+    if current_preset not in SYMBOL_PRESETS:
+        current_preset = "Custom..." # Fallback if loaded symbol is not in presets
+        st.session_state["shared_custom_symbol"] = st.session_state.get("sl_symbol", "AAPL") # Try to preserve value
+
+    def on_preset_change():
+        st.session_state["shared_symbol_preset"] = st.session_state[f"{key_prefix}_preset_select"]
+        
+    symbol_preset = st.selectbox(
+        "Symbol",
+        options=SYMBOL_PRESETS,
+        index=SYMBOL_PRESETS.index(current_preset) if current_preset in SYMBOL_PRESETS else 0,
+        key=f"{key_prefix}_preset_select",
+        help="よく使う銘柄のプリセットです。Custom... を選ぶと任意のシンボルを入力できます。",
+        on_change=on_preset_change
+    )
+
+    effective_symbol = symbol_preset
+    
+    if symbol_preset == "Custom...":
+        def on_custom_change():
+            st.session_state["shared_custom_symbol"] = st.session_state[f"{key_prefix}_custom_input"]
+
+        custom_symbol = st.text_input(
+            "Custom Symbol",
+            value=st.session_state["shared_custom_symbol"],
+            key=f"{key_prefix}_custom_input",
+            placeholder="例: 7203.T (トヨタ), 9984.T (ソフトバンクG) など",
+            on_change=on_custom_change
+        )
+        effective_symbol = custom_symbol.strip() or "AAPL"
+    
+    return effective_symbol
 
 
 # =============================================================================
@@ -328,11 +387,17 @@ def render_backtest_ui():
     if loaded_strat:
         st.sidebar.success(f"Loaded: {loaded_strat['name']}")
         default_symbol = loaded_strat.get("symbol", "AAPL")
+        # Update shared state if loaded
+        st.session_state["shared_symbol_preset"] = "Custom..." # Assume custom or we check if it's in preset
+        st.session_state["shared_custom_symbol"] = default_symbol
+        
         if loaded_strat.get("params"):
             default_short = loaded_strat["params"].get("short_window", 9)
             default_long = loaded_strat["params"].get("long_window", 21)
 
-    symbol = st.sidebar.text_input("Symbol", value=default_symbol)
+    # Use the shared symbol selector
+    symbol = render_symbol_selector(key_prefix="bl")
+    
     timeframe = st.sidebar.selectbox("Timeframe", options=["1d", "1h", "5m"], index=0)
     
     start_date = st.sidebar.date_input("Start Date", value=datetime(2020, 1, 1))
