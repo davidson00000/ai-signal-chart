@@ -51,23 +51,66 @@ class GridSearchOptimizer:
         initial_capital: float = 1000000,
         commission_rate: float = 0.001,
         position_size: float = 1.0,
-        strategy_type: str = "ma_cross"
+        strategy_type: str = "ma_cross",
+        fixed_params: Dict[str, Any] = None
     ) -> List[OptimizationResult]:
         """
         Run grid search optimization for a single symbol
         """
         from backend.backtester import BacktestEngine
-        from backend.strategies.ma_cross import MACrossStrategy
-        from backend.strategies.rsi_strategy import RSIStrategy
-        from backend.strategies.ma_rsi_combo import MARSIComboStrategy
         from backend import data_feed
+        from backend.strategies import (
+            MACrossStrategy, EMACrossStrategy, MACDTrendStrategy,
+            RSIMeanReversionStrategy, StochasticOscillatorStrategy,
+            BollingerMeanReversionStrategy, BollingerBreakoutStrategy,
+            DonchianBreakoutStrategy, ATRTrailingMAStrategy, ROCMomentumStrategy
+        )
         
+        # Strategy Factory Map
+        STRATEGY_CLASSES = {
+            "ma_cross": MACrossStrategy,
+            "ema_cross": EMACrossStrategy,
+            "macd_trend": MACDTrendStrategy,
+            "rsi_mean_reversion": RSIMeanReversionStrategy,
+            "stoch_oscillator": StochasticOscillatorStrategy,
+            "bollinger_mean_reversion": BollingerMeanReversionStrategy,
+            "bollinger_breakout": BollingerBreakoutStrategy,
+            "donchian_breakout": DonchianBreakoutStrategy,
+            "atr_trailing_ma": ATRTrailingMAStrategy,
+            "roc_momentum": ROCMomentumStrategy,
+        }
+        
+        if strategy_type not in STRATEGY_CLASSES:
+             raise ValueError(f"Unknown strategy type: {strategy_type}")
+        
+        strategy_cls = STRATEGY_CLASSES[strategy_type]
+        fixed_params = fixed_params or {}
+
         # Get data
+        fetch_start_date = start_date
+        backtest_start_dt = None
+        
+        if start_date:
+            # Calculate buffer for warm-up (e.g. 365 days)
+            # This matches the logic in /simulate endpoint
+            try:
+                start_dt = pd.Timestamp(start_date)
+                buffer_dt = start_dt - pd.Timedelta(days=365)
+                fetch_start_date = buffer_dt.strftime("%Y-%m-%d")
+                
+                # Set backtest start date to original requested date
+                # Ensure it's timezone-aware (UTC) if needed, but BacktestEngine handles naive/aware comparison
+                # We'll pass the timestamp directly
+                backtest_start_dt = start_dt
+            except Exception:
+                # Fallback if date parsing fails
+                pass
+
         candles = data_feed.get_chart_data(
             symbol=symbol,
             timeframe=timeframe,
             limit=3000,
-            start=start_date,
+            start=fetch_start_date,
             end=end_date
         )
         
@@ -91,34 +134,17 @@ class GridSearchOptimizer:
         for combo in combinations:
             params = dict(zip(param_names, combo))
             
-            # Validate MA parameters
-            if "short_window" in params and "long_window" in params:
-                if params["short_window"] >= params["long_window"]:
-                    continue  # Skip invalid combinations
+            # Merge with fixed params
+            full_params = {**fixed_params, **params}
+            
+            # Basic validation for window params
+            if "short_window" in full_params and "long_window" in full_params:
+                if full_params["short_window"] >= full_params["long_window"]:
+                    continue
             
             # Create strategy instance
             try:
-                if strategy_type == "ma_cross":
-                    strategy = MACrossStrategy(
-                        short_window=params.get("short_window", 9),
-                        long_window=params.get("long_window", 21)
-                    )
-                elif strategy_type == "rsi":
-                    strategy = RSIStrategy(
-                        period=params.get("rsi_period", 14),
-                        oversold=params.get("rsi_oversold", 30),
-                        overbought=params.get("rsi_overbought", 70)
-                    )
-                elif strategy_type == "ma_rsi_combo":
-                    strategy = MARSIComboStrategy(
-                        short_window=params.get("short_window", 9),
-                        long_window=params.get("long_window", 21),
-                        rsi_period=params.get("rsi_period", 14),
-                        rsi_oversold=params.get("rsi_oversold", 30),
-                        rsi_overbought=params.get("rsi_overbought", 70)
-                    )
-                else:
-                    raise ValueError(f"Unknown strategy type: {strategy_type}")
+                strategy = strategy_cls(**full_params)
                 
                 # Run backtest
                 engine = BacktestEngine(
@@ -127,14 +153,14 @@ class GridSearchOptimizer:
                     position_size=position_size
                 )
                 
-                backtest_result = engine.run_backtest(df, strategy)
+                backtest_result = engine.run_backtest(df, strategy, start_date=backtest_start_dt)
                 
                 # Extract stats from result
                 stats = backtest_result.get("stats", {})
                 
                 # Store result
                 results.append(OptimizationResult(
-                    params=params,
+                    params=params, # Store only optimized params to avoid clutter
                     total_pnl=stats.get("total_pnl", 0.0),
                     return_pct=stats.get("return_pct", 0.0),
                     sharpe_ratio=stats.get("sharpe_ratio", 0.0),
@@ -145,7 +171,6 @@ class GridSearchOptimizer:
                 
             except Exception as e:
                 # Skip failed combinations
-                # print(f"Failed to backtest params {params}: {e}")
                 continue
         
         # Sort by total PnL (descending)

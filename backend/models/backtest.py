@@ -32,7 +32,11 @@ class BacktestRequest(BaseModel):
 
     strategy: str = Field(
         default="ma_cross",
-        description="Strategy name (currently only 'ma_cross' supported)",
+        description="Strategy name (e.g., 'ma_cross', 'ema_cross', 'macd_trend')",
+    )
+    params: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Strategy-specific parameters",
     )
 
     initial_capital: float = Field(
@@ -118,11 +122,17 @@ class BacktestResponse(BaseModel):
         default_factory=list,
         description="List of all trades",
     )
-    metrics: BacktestStats = Field(..., description="Summary statistics")
-
+    metrics: Dict[str, Any] = Field(
+        ...,
+        description="Performance metrics (total_return, sharpe_ratio, etc.)",
+    )
     data_points: int = Field(
-        default=0,
-        description="Number of candles used in backtest",
+        ...,
+        description="Number of data points (candles) used in the backtest",
+    )
+    price_series: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="Daily price series with optional indicators for visualization",
     )
 
 

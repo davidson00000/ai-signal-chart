@@ -75,3 +75,22 @@ class MACrossOptimizationRequest(BaseModel):
     long_min: int = Field(default=20, description="Min long window")
     long_max: int = Field(default=60, description="Max long window")
     long_step: int = Field(default=5, description="Long window step")
+
+
+class GenericOptimizationRequest(BaseModel):
+    """Generic request model for parameter optimization"""
+    
+    symbol: str = Field(..., description="Symbol to optimize")
+    timeframe: str = Field(default="1d", description="Timeframe")
+    start_date: Optional[str] = Field(default=None, description="Start date (YYYY-MM-DD)")
+    end_date: Optional[str] = Field(default=None, description="End date (YYYY-MM-DD)")
+    
+    strategy_type: str = Field(..., description="Strategy type")
+    
+    initial_capital: float = Field(default=1000000, description="Initial capital")
+    commission_rate: float = Field(default=0.001, description="Commission rate")
+    
+    # Generic Parameter Grid
+    # Example: {"short_window": [5, 10, 15], "long_window": [20, 30, 40]}
+    param_grid: Dict[str, List[Any]] = Field(..., description="Dictionary of parameter names and list of values to test")
+    fixed_params: Dict[str, Any] = Field(default={}, description="Fixed parameters to pass to strategy")

@@ -6,7 +6,7 @@ import pandas as pd
 import numpy as np
 from typing import List, Dict, Any
 
-from backend.strategies.base import BaseStrategy
+from backend.strategies.base import StrategyBase
 
 
 class BacktestEngine:
@@ -44,13 +44,14 @@ class BacktestEngine:
                 ts = ts.tz_localize("UTC")
         return ts.isoformat().replace("+00:00", "Z")
 
-    def run_backtest(self, candles: pd.DataFrame, strategy: BaseStrategy) -> Dict[str, Any]:
+    def run_backtest(self, candles: pd.DataFrame, strategy: StrategyBase, start_date: pd.Timestamp = None) -> Dict[str, Any]:
         """
         Run backtest with given candles and strategy.
 
         Args:
             candles: DataFrame with OHLCV data (must have 'close' column)
             strategy: Strategy instance that implements generate_signals()
+            start_date: Optional start date for trading (data before this is used for warm-up)
 
         Returns:
             Dict containing:
@@ -75,8 +76,16 @@ class BacktestEngine:
         trades: List[Dict] = []
         equity_curve: List[Dict] = []
 
+        # Ensure start_date is timezone-aware if candles index is
+        if start_date and candles.index.tz is not None and start_date.tzinfo is None:
+            start_date = start_date.tz_localize("UTC")
+
         # 3. Iterate through candles
         for idx, (ts, row) in enumerate(candles.iterrows()):
+            # Skip if before start_date (warm-up period)
+            if start_date and ts < start_date:
+                continue
+
             price = float(row["close"])
             # Get signal for this timestamp
             # signals is a Series with same index as df

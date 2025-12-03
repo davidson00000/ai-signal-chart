@@ -28,6 +28,7 @@ def main():
     parser.add_argument('--symbols', type=str, help='Comma-separated list of symbols (overrides file)')
     parser.add_argument('--lookback_days', type=int, default=365, help='Number of days to look back')
     parser.add_argument('--output', type=str, default='up_move_stats_result.csv', help='Output CSV file path')
+    parser.add_argument('--fx_rate', type=float, default=150.0, help='USD/JPY rate. Set to <= 0 to disable JPY conversion.')
     
     args = parser.parse_args()
     
@@ -47,15 +48,20 @@ def main():
     results = []
     logger.info(f"Processing {len(symbols)} symbols with lookback {args.lookback_days} days...")
     
-    for symbol in symbols:
-        df = download_data(symbol, args.lookback_days)
-        if df is not None:
-            stats = calculate_stats(df)
-            if stats:
-                stats['symbol'] = symbol
-                results.append(stats)
-        else:
-            logger.warning(f"Skipping {symbol} due to download failure.")
+    for i, symbol in enumerate(symbols, 1):
+        logger.info(f"[{i}/{len(symbols)}] Processing {symbol}...")
+        try:
+            df = download_data(symbol, args.lookback_days)
+            if df is not None:
+                stats = calculate_stats(df, args.fx_rate)
+                if stats:
+                    stats['symbol'] = symbol
+                    results.append(stats)
+            else:
+                logger.warning(f"Skipping {symbol} due to download failure.")
+        except Exception as e:
+            logger.error(f"Unexpected error processing {symbol}: {e}")
+            continue
 
     if not results:
         logger.error("No results generated.")
@@ -65,9 +71,14 @@ def main():
     results_df = pd.DataFrame(results)
     
     # Reorder columns
-    cols = ['symbol', 'days_total', 'up_1pct_days', 'up_5pct_days', 'up_10pct_days', 'start_date', 'end_date']
+    cols = ['symbol', 'days_total', 'up_1pct_days', 'up_5pct_days', 'up_10pct_days', 'start_date', 'end_date', 'last_price_usd']
+    if args.fx_rate > 0:
+        cols.append('min_invest_jpy')
+        
     # Ensure all columns exist (in case of empty results but that's handled above)
-    results_df = results_df[cols]
+    # Filter columns that actually exist in the dataframe (min_invest_jpy might not be there if all failed or price 0)
+    existing_cols = [c for c in cols if c in results_df.columns]
+    results_df = results_df[existing_cols]
     
     # Console output
     print("\n" + "="*80)

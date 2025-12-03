@@ -6,10 +6,21 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Optional, Dict, Any
 import pandas as pd
+from datetime import datetime, timedelta
 
 from backend import data_feed
 from backend.backtester import BacktestEngine
 from backend.strategies.ma_cross import MACrossStrategy
+from backend.strategies.ema_cross import EMACrossStrategy
+from backend.strategies.macd_trend import MACDTrendStrategy
+from backend.strategies.rsi_mean_reversion import RSIMeanReversionStrategy
+from backend.strategies.stoch_oscillator import StochasticOscillatorStrategy
+from backend.strategies.bollinger_mean_reversion import BollingerMeanReversionStrategy
+from backend.strategies.bollinger_breakout import BollingerBreakoutStrategy
+from backend.strategies.donchian_breakout import DonchianBreakoutStrategy
+from backend.strategies.atr_trailing_ma import ATRTrailingMAStrategy
+from backend.strategies.roc_momentum import ROCMomentumStrategy
+
 from backend.models.backtest import (
     BacktestRequest,
     BacktestResponse,
@@ -17,10 +28,10 @@ from backend.models.backtest import (
     EquityCurvePoint,
     TradeSummary,
 )
+
+
 from backend.models.optimization import (
-    OptimizationRequest, 
-    OptimizationResponse,
-    MACrossOptimizationRequest
+    OptimizationRequest, OptimizationResponse, MACrossOptimizationRequest, GenericOptimizationRequest
 )
 from backend.models.strategy_lab import (
     StrategyLabBatchRequest,
@@ -176,108 +187,155 @@ async def get_indicators(
 
 
 @app.post("/simulate", response_model=BacktestResponse)
-def simulate_backtest(request: BacktestRequest) -> BacktestResponse:
+async def run_simulation(request: BacktestRequest):
     """
     Run backtest simulation.
-
-    Args:
-        request: BacktestRequest with symbol, timeframe, strategy parameters
-
-    Returns:
-        BacktestResponse with equity curve, trades, and statistics
-
-    Raises:
-        HTTPException: If data cannot be fetched or backtest fails
     """
     try:
-        # 1. Fetch historical market data
-        candles: List[dict] = data_feed.get_chart_data(
+        # 1. Get Data
+        candles = data_feed.get_historical_candles(
             symbol=request.symbol,
             timeframe=request.timeframe,
-            start=request.start_date,
-            end=request.end_date,
-            limit=2000,
+            limit=5000 # Sufficient limit for backtest
         )
-
+        
         if not candles:
-            raise HTTPException(
-                status_code=400,
-                detail="No market data returned for this query.",
-            )
-
-        # 2. Convert to DataFrame and set index
+            raise HTTPException(status_code=404, detail=f"No data found for {request.symbol}")
+            
         df = pd.DataFrame(candles)
-        
-        # Ensure 'time' column exists and convert to datetime
-        if "time" not in df.columns:
-            raise HTTPException(
-                status_code=500,
-                detail="Data feed did not return 'time' column.",
-            )
-        
-        df["time"] = pd.to_datetime(df["time"])
-        df = df.set_index("time")
+        if df.empty:
+             raise HTTPException(status_code=404, detail="Empty data returned")
+             
+        df["timestamp"] = pd.to_datetime(df["timestamp"])
+        df.set_index("timestamp", inplace=True)
+        df.sort_index(inplace=True)
 
-        # Ensure 'close' column exists
-        if "close" not in df.columns:
-            raise HTTPException(
-                status_code=500,
-                detail="Data feed did not return 'close' column.",
-            )
+        # Filter by Date Range if provided
+        start_ts = None
+        if request.start_date:
+            # Robust approach: Convert index to UTC and compare
+            if df.index.tz is None:
+                 df.index = df.index.tz_localize('UTC')
+            
+            # Parse request dates as UTC
+            start_ts = pd.Timestamp(request.start_date).tz_convert('UTC') if pd.Timestamp(request.start_date).tzinfo else pd.Timestamp(request.start_date).tz_localize('UTC')
+            
+            # Calculate buffer date (e.g., 365 days before start_date) for warm-up
+            buffer_date = start_ts - pd.Timedelta(days=365)
+            df = df[df.index >= buffer_date]
 
-        # 3. Initialize strategy based on request
+        if request.end_date:
+            if df.index.tz is None:
+                 df.index = df.index.tz_localize('UTC')
+            
+            end_ts = pd.Timestamp(request.end_date).tz_convert('UTC') if pd.Timestamp(request.end_date).tzinfo else pd.Timestamp(request.end_date).tz_localize('UTC')
+            df = df[df.index <= end_ts]
+
+        if df.empty:
+             raise HTTPException(status_code=400, detail="No data found for the specified date range")
+        params = request.params or {}
+        
+        # Backward compatibility for ma_cross specific fields
+        if request.strategy == "ma_cross" and not params:
+            params = {
+                "short_window": request.short_window,
+                "long_window": request.long_window
+            }
+
         if request.strategy == "ma_cross":
-            strategy = MACrossStrategy(
-                short_window=request.short_window,
-                long_window=request.long_window,
-            )
+            strategy = MACrossStrategy(**params)
+        elif request.strategy == "ema_cross":
+            strategy = EMACrossStrategy(**params)
+        elif request.strategy == "macd_trend":
+            strategy = MACDTrendStrategy(**params)
+        elif request.strategy == "rsi_mean_reversion":
+            strategy = RSIMeanReversionStrategy(**params)
+        elif request.strategy == "stoch_oscillator":
+            strategy = StochasticOscillatorStrategy(**params)
+        elif request.strategy == "bollinger_mean_reversion":
+            strategy = BollingerMeanReversionStrategy(**params)
+        elif request.strategy == "bollinger_breakout":
+            strategy = BollingerBreakoutStrategy(**params)
+        elif request.strategy == "donchian_breakout":
+            strategy = DonchianBreakoutStrategy(**params)
+        elif request.strategy == "atr_trailing_ma":
+            strategy = ATRTrailingMAStrategy(**params)
+        elif request.strategy == "roc_momentum":
+            strategy = ROCMomentumStrategy(**params)
         else:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Unsupported strategy: {request.strategy}",
-            )
+            raise HTTPException(status_code=400, detail=f"Unknown strategy: {request.strategy}")
 
-        # 4. Initialize and run backtest engine
+        # 3. Run Backtest
         engine = BacktestEngine(
             initial_capital=request.initial_capital,
             commission_rate=request.commission_rate,
-            position_size=request.position_size,
-            lot_size=1.0,
+            position_size=request.position_size
         )
+        
+        # Pass start_ts to run_backtest to skip trading during warm-up
+        result = engine.run_backtest(df, strategy, start_date=start_ts)
+        
+        # 4. Format Response
+        # Construct price_series for visualization
+        price_series = []
+        
+        # Calculate MAs if strategy is ma_cross for visualization
+        # Note: This duplicates calculation but ensures we have data for the chart
+        # ideally the strategy should return indicators, but for now we re-calc or just pass close
+        
+        # Create a copy to avoid modifying original df if needed, though we are just reading
+        viz_df = df.copy()
+        
+        if request.strategy == "ma_cross":
+            # Re-calculate MAs for visualization
+            # Use params if available, else request fields
+            short_window = params.get("short_window", request.short_window)
+            long_window = params.get("long_window", request.long_window)
+            
+            viz_df['ma_short'] = viz_df['close'].rolling(window=short_window).mean()
+            viz_df['ma_long'] = viz_df['close'].rolling(window=long_window).mean()
+        
+        # Convert to list of dicts
+        viz_df = viz_df.reset_index() # make timestamp a column
+        
+        # Filter viz_df to match the backtest period (start_ts to end_ts)
+        # start_ts and end_ts are calculated earlier in the function
+        if start_ts:
+             viz_df = viz_df[viz_df["timestamp"] >= start_ts]
+        if 'end_ts' in locals() and end_ts:
+             viz_df = viz_df[viz_df["timestamp"] <= end_ts]
+        
+        for _, row in viz_df.iterrows():
+            item = {
+                "date": row["timestamp"].isoformat(),
+                "close": row["close"]
+            }
+            if "ma_short" in row and pd.notna(row["ma_short"]):
+                item["ma_short"] = row["ma_short"]
+            if "ma_long" in row and pd.notna(row["ma_long"]):
+                item["ma_long"] = row["ma_long"]
+            price_series.append(item)
 
-        result = engine.run_backtest(df, strategy)
-
-        # 5. Convert result to response models
-        equity_curve = [
-            EquityCurvePoint(**point) for point in result["equity_curve"]
-        ]
-        trades = [TradeSummary(**trade) for trade in result["trades"]]
-        stats = BacktestStats(**result["stats"])
-
-        # 6. Build and return response
-        response = BacktestResponse(
+        return BacktestResponse(
             symbol=request.symbol,
             timeframe=request.timeframe,
-            strategy=str(strategy),
-            equity_curve=equity_curve,
-            trades=trades,
-            metrics=stats,
+            strategy=request.strategy,
+            equity_curve=result["equity_curve"],
+            trades=result["trades"],
+            metrics=result["stats"],
             data_points=len(df),
+            price_series=price_series
         )
 
-        return response
-
-        return response
-
-    except HTTPException:
-        # Re-raise HTTP exceptions
-        raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        # Catch any other errors and return 500
-        raise HTTPException(
-            status_code=400,
-            detail=f"Data fetching or strategy execution failed: {e}",
-        )
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+
 
 
 @app.post("/optimize/ma_cross", response_model=OptimizationResponse)
@@ -337,6 +395,63 @@ async def optimize_ma_cross(request: MACrossOptimizationRequest) -> Optimization
     except HTTPException:
         raise
     except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Optimization failed: {str(e)}")
+
+
+@app.post("/optimize/generic", response_model=OptimizationResponse)
+async def optimize_generic(request: GenericOptimizationRequest) -> OptimizationResponse:
+    """
+    Generic Grid Search Optimization Endpoint
+    """
+    try:
+        from backend.optimizer import GridSearchOptimizer
+        
+        # Calculate total combinations
+        total_combinations = 1
+        for values in request.param_grid.values():
+            total_combinations *= len(values)
+            
+        if total_combinations > 1000:
+             raise HTTPException(
+                status_code=422, 
+                detail=f"Too many combinations: {total_combinations}. Limit is 1000."
+            )
+
+        optimizer = GridSearchOptimizer()
+        
+        # Run optimization
+        results = optimizer.optimize(
+            symbol=request.symbol,
+            timeframe=request.timeframe,
+            start_date=request.start_date,
+            end_date=request.end_date,
+            param_grid=request.param_grid,
+            initial_capital=request.initial_capital,
+            commission_rate=request.commission_rate,
+            position_size=1.0,
+            strategy_type=request.strategy_type,
+            fixed_params=request.fixed_params
+        )
+        
+        return OptimizationResponse(
+            symbol=request.symbol,
+            timeframe=request.timeframe,
+            strategy_type=request.strategy_type,
+            total_combinations=len(results),
+            top_results=[
+                {
+                    "rank": i + 1,
+                    **r.to_dict()
+                }
+                for i, r in enumerate(results)
+            ]
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Optimization failed: {str(e)}")
 
 
@@ -691,8 +806,217 @@ async def delete_experiment_endpoint(experiment_id: str) -> Dict[str, str]:
         raise HTTPException(status_code=500, detail=f"Failed to delete experiment: {str(e)}")
 
 
+
+@app.get("/strategies")
+async def list_strategies_endpoint() -> List[Dict[str, str]]:
+    """
+    List available strategies with metadata
+    """
+    from backend.strategies.registry import list_strategies
+    return [
+        {
+            "id": s.id,
+            "name": s.name,
+            "description": s.description
+        }
+        for s in list_strategies()
+    ]
+
+
+@app.get("/strategies/{strategy_id}/doc")
+async def get_strategy_doc_endpoint(strategy_id: str) -> Dict[str, Any]:
+    """
+    Get strategy documentation (markdown) and presets
+    """
+    from backend.strategies.registry import get_strategy_metadata
+    from backend.strategies.docs import parse_strategy_doc
+    import os
+    
+    metadata = get_strategy_metadata(strategy_id)
+    if not metadata:
+        raise HTTPException(status_code=404, detail="Strategy not found")
+        
+    try:
+        # Resolve path relative to project root
+        doc_path = metadata.docs_path
+        
+        markdown_content, presets = parse_strategy_doc(doc_path)
+        
+        return {
+            "id": strategy_id, 
+            "markdown": markdown_content,
+            "presets": presets
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to load strategy doc: {str(e)}")
+
+
+# Live Strategy Endpoints
+
+@app.post("/live-strategy")
+async def set_live_strategy_endpoint(config: Dict[str, Any]) -> Dict[str, str]:
+    """
+    Set the live trading strategy configuration.
+    Accepts generic dict and validates via Pydantic model.
+    """
+    try:
+        from backend.models.live_strategy import LiveStrategyConfig, save_live_strategy
+        
+        # Validate and convert
+        strategy_config = LiveStrategyConfig(**config)
+        save_live_strategy(strategy_config)
+        
+        return {"status": "ok", "message": "Live strategy saved successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/live-strategy")
+async def get_live_strategy_endpoint() -> Dict[str, Any]:
+    """
+    Get the current live trading strategy configuration.
+    """
+    try:
+        from backend.models.live_strategy import load_live_strategy
+        
+        config = load_live_strategy()
+        return config.model_dump()
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Live strategy not set.")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/live-signal")
+async def get_live_signal_endpoint() -> Dict[str, Any]:
+    """
+    Generate a daily trading signal based on the saved live strategy.
+    """
+    try:
+        from backend.models.live_strategy import load_live_strategy
+        import pandas as pd
+        import numpy as np
+        
+        # 1. Load Live Strategy
+        try:
+            config = load_live_strategy()
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="Live strategy not set.")
+
+        symbol = config.symbol
+        timeframe = config.timeframe
+        
+        # 2. Fetch Historical Data
+        # We need enough data for indicators. 
+        # MA Cross: long_window + buffer
+        # RSI: rsi_period + buffer
+        # Defaulting to 365 days to be safe and consistent with backtest
+        start_date = (datetime.now() - timedelta(days=365)).strftime("%Y-%m-%d")
+        
+        # Fetch data using get_chart_data which supports start date
+        candles = data_feed.get_chart_data(symbol, timeframe, limit=3000, start=start_date)
+        if not candles:
+             raise HTTPException(status_code=400, detail=f"No data found for {symbol}")
+        
+        df = pd.DataFrame(candles)
+        # Convert unix time to datetime
+        if "time" in df.columns:
+            df["date"] = pd.to_datetime(df["time"], unit="s")
+            
+        # Ensure sorted
+        df = df.sort_values("date").reset_index(drop=True)
+        
+        # 3. Compute Indicators & Signal
+        signal = "HOLD"
+        params = config.params
+        
+        if config.strategy_type == "ma_cross":
+            short_window = int(params.get("short_window", 9))
+            long_window = int(params.get("long_window", 21))
+            
+            if len(df) < long_window + 2:
+                 raise HTTPException(status_code=400, detail="Not enough data for MA calculation")
+            
+            df["short_ma"] = df["close"].rolling(window=short_window).mean()
+            df["long_ma"] = df["close"].rolling(window=long_window).mean()
+            
+            # Check crossover
+            # prev: -2, curr: -1
+            prev_short = df["short_ma"].iloc[-2]
+            prev_long = df["long_ma"].iloc[-2]
+            curr_short = df["short_ma"].iloc[-1]
+            curr_long = df["long_ma"].iloc[-1]
+            
+            prev_diff = prev_short - prev_long
+            curr_diff = curr_short - curr_long
+            
+            if prev_diff <= 0 and curr_diff > 0:
+                signal = "BUY"
+            elif prev_diff >= 0 and curr_diff < 0:
+                signal = "SELL"
+                
+        elif config.strategy_type == "rsi_mean_reversion":
+            rsi_period = int(params.get("rsi_period", 14))
+            oversold = int(params.get("oversold_level", 30))
+            overbought = int(params.get("overbought_level", 70))
+            
+            if len(df) < rsi_period + 2:
+                 raise HTTPException(status_code=400, detail="Not enough data for RSI calculation")
+            
+            # Simple RSI calculation
+            delta = df["close"].diff()
+            gain = (delta.where(delta > 0, 0)).rolling(window=rsi_period).mean()
+            loss = (-delta.where(delta < 0, 0)).rolling(window=rsi_period).mean()
+            rs = gain / loss
+            df["rsi"] = 100 - (100 / (1 + rs))
+            
+            # Check thresholds
+            prev_rsi = df["rsi"].iloc[-2]
+            curr_rsi = df["rsi"].iloc[-1]
+            
+            if prev_rsi <= oversold and curr_rsi > oversold:
+                signal = "BUY"
+            elif prev_rsi >= overbought and curr_rsi < overbought:
+                signal = "SELL"
+        
+        # 4. Calculate Suggested Shares
+        latest_price = float(df["close"].iloc[-1])
+        mode = config.risk.position_mode
+        value = config.risk.position_value
+        suggested_shares = 0
+        
+        if mode == "fixed_shares":
+            suggested_shares = int(value)
+        elif mode == "fixed_amount_jpy":
+            if latest_price > 0:
+                suggested_shares = max(int(value // latest_price), 0)
+        
+        # 5. Return Response
+        return {
+            "symbol": config.symbol,
+            "timeframe": config.timeframe,
+            "strategy_type": config.strategy_type,
+            "strategy_name": config.strategy_name,
+            "signal": signal,
+            "latest_price": latest_price,
+            "timestamp": df["date"].iloc[-1].isoformat(),
+            "params": config.params,
+            "risk": {
+                "position_mode": config.risk.position_mode,
+                "position_value": config.risk.position_value,
+                "suggested_shares": suggested_shares,
+            },
+        }
+
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # `python -m backend.main` で起動できるように
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run("backend.main:app", host="0.0.0.0", port=8000, reload=False)
+    uvicorn.run("backend.main:app", host="0.0.0.0", port=8001, reload=False)

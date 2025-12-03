@@ -95,6 +95,8 @@ def fetch_crypto_candles(
     symbol: str,
     timeframe: str,
     limit: int,
+    start: Optional[str] = None,
+    end: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """
     Fetch cryptocurrency candles using ccxt
@@ -103,6 +105,8 @@ def fetch_crypto_candles(
         symbol: Crypto pair (e.g., "BTC/USDT")
         timeframe: Timeframe string (e.g., "1m", "5m", "1h", "1d")
         limit: Number of candles to fetch
+        start: Start date string (YYYY-MM-DD) - Optional
+        end: End date string (YYYY-MM-DD) - Optional
         
     Returns:
         List of candle dictionaries
@@ -112,7 +116,13 @@ def fetch_crypto_candles(
     """
     exchange = get_exchange()
     try:
-        ohlcv = exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
+        # CCXT uses 'since' in milliseconds
+        since = None
+        if start:
+            dt = datetime.strptime(start, "%Y-%m-%d")
+            since = int(dt.timestamp() * 1000)
+            
+        ohlcv = exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit, since=since)
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Failed to fetch crypto data: {e}")
 
@@ -126,19 +136,24 @@ def fetch_stock_candles(
     symbol: str,
     timeframe: str,
     limit: int,
+    start: Optional[str] = None,
+    end: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """
     Fetch stock price candles using yfinance with extended data support (up to 3000 points)
     
     Strategy:
-    1. Try period="max" first for maximum historical data
-    2. If that fails or returns insufficient data, use start/end dates
-    3. Sort and trim to requested limit (max 3000)
+    1. If start/end provided, use them directly.
+    2. Else, try period="max" first for daily data.
+    3. If that fails or returns insufficient data, use calculated date ranges.
+    4. Sort and trim to requested limit (max 3000)
     
     Args:
         symbol: Stock symbol (e.g., "AAPL", "7203.T")
         timeframe: Timeframe string (e.g., "1m", "5m", "1h", "1d")
         limit: Number of candles to return (max 3000)
+        start: Start date string (YYYY-MM-DD) - Optional
+        end: End date string (YYYY-MM-DD) - Optional
         
     Returns:
         List of candle dictionaries
@@ -171,6 +186,23 @@ def fetch_stock_candles(
     # Determine fetch strategy based on timeframe
     df = None
     
+    # Strategy 0: Explicit Date Range (Priority)
+    if start and end:
+        try:
+            df = yf.download(
+                symbol,
+                start=start,
+                end=end,
+                interval=interval,
+                progress=False,
+                auto_adjust=True
+            )
+            if df is not None and not df.empty:
+                return df_to_candles(df, limit)
+        except Exception as e:
+            # Fallback to other strategies if explicit range fails
+            pass
+
     # Strategy 1: Try period="max" for daily data
     if timeframe == "1d":
         try:
@@ -190,29 +222,29 @@ def fetch_stock_candles(
             pass
     
     # Strategy 2: Use calculated date ranges
-    end_date = datetime.now()
+    end_dt = datetime.now()
     
     # Calculate start date based on timeframe and desired data points
     if timeframe in ("1m", "5m"):
         # Intraday minute data: limited by Yahoo (max ~7 days)
-        start_date = end_date - timedelta(days=7)
+        start_dt = end_dt - timedelta(days=7)
     elif timeframe in ("15m", "30m", "1h"):
         # Hourly data: try to get ~60 days
-        start_date = end_date - timedelta(days=60)
+        start_dt = end_dt - timedelta(days=60)
     elif timeframe == "4h":
         # 4-hour approximated with 60m: ~120 days
-        start_date = end_date - timedelta(days=120)
+        start_dt = end_dt - timedelta(days=120)
     else:  # "1d"
         # Daily data: calculate days needed for limit candles
         # Add buffer for weekends/holidays
         days_needed = int(limit * 1.5)  # 1.5x buffer for non-trading days
-        start_date = end_date - timedelta(days=min(days_needed, 3650))  # Max 10 years
+        start_dt = end_dt - timedelta(days=min(days_needed, 3650))  # Max 10 years
 
     try:
         df = yf.download(
             symbol,
-            start=start_date.strftime("%Y-%m-%d"),
-            end=end_date.strftime("%Y-%m-%d"),
+            start=start_dt.strftime("%Y-%m-%d"),
+            end=end_dt.strftime("%Y-%m-%d"),
             interval=interval,
             progress=False,
             auto_adjust=True
@@ -266,9 +298,9 @@ def get_chart_data(
     is_crypto = "/" in symbol
 
     if is_crypto:
-        return fetch_crypto_candles(symbol, timeframe, limit)
+        return fetch_crypto_candles(symbol, timeframe, limit, start, end)
     else:
-        return fetch_stock_candles(symbol, timeframe, limit)
+        return fetch_stock_candles(symbol, timeframe, limit, start, end)
 
 
 def get_latest_price(symbol: str, timeframe: str = "1m") -> float:

@@ -14,8 +14,10 @@ from dataclasses import dataclass
 import pandas as pd
 import plotly.graph_objects as go
 import requests
+import altair as alt
 from datetime import datetime, timedelta
 import uuid
+from strategy_guides import STRATEGY_GUIDES
 import os
 import json
 from typing import Any, Dict, List, Tuple
@@ -24,12 +26,71 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import streamlit as st
+from backend.strategies import (
+    MACrossStrategy, EMACrossStrategy, MACDTrendStrategy,
+    RSIMeanReversionStrategy, StochasticOscillatorStrategy,
+    BollingerMeanReversionStrategy, BollingerBreakoutStrategy,
+    DonchianBreakoutStrategy, ATRTrailingMAStrategy, ROCMomentumStrategy
+)
+
+
+def apply_preset_callback(preset_params, strategy_type):
+    """Callback to apply preset parameters to session state"""
+    for p_key, p_val in preset_params.items():
+        ss_key = None
+        if strategy_type == "ma_cross":
+            if p_key == "short_window": ss_key = "sl_short_single"
+            if p_key == "long_window": ss_key = "sl_long_single"
+        elif strategy_type == "rsi_mean_reversion":
+            if p_key == "rsi_period": ss_key = "sl_rsi_period"
+            if p_key == "oversold": ss_key = "sl_rsi_oversold"
+            if p_key == "overbought": ss_key = "sl_rsi_overbought"
+        
+        if ss_key:
+            st.session_state[ss_key] = p_val
+    
+    st.session_state["preset_message"] = f"Preset applied successfully!"
 
 
 # =============================================================================
 # Configuration
 # =============================================================================
-BACKEND_URL = "http://localhost:8000"
+BACKEND_URL = "http://localhost:8001"
+
+# =============================================================================
+# Universe Configuration
+# =============================================================================
+PROJECT_ROOT = Path(__file__).resolve().parent
+UNIVERSE_MODE = "mvp"  # 'mvp' or 'sp500'
+
+if UNIVERSE_MODE == "mvp":
+    UNIVERSE_CSV = PROJECT_ROOT / "tools" / "symbols_universe_mvp.csv"
+elif UNIVERSE_MODE == "sp500":
+    UNIVERSE_CSV = PROJECT_ROOT / "tools" / "symbols_universe_sp500.csv"
+else:
+    UNIVERSE_CSV = PROJECT_ROOT / "tools" / "symbols_universe.csv"
+
+@st.cache_data
+def load_symbol_universe(csv_path: Path) -> List[str]:
+    """
+    Load symbol list from the specified CSV file.
+    Expected columns: 'symbol', 'note' (optional)
+    """
+    if not csv_path.exists():
+        st.error(f"Universe CSV not found: {csv_path}")
+        return []
+    
+    try:
+        df = pd.read_csv(csv_path)
+        if "symbol" not in df.columns:
+            st.error(f"'symbol' column not found in {csv_path}")
+            return []
+        
+        symbols = df["symbol"].astype(str).str.strip().tolist()
+        return symbols
+    except Exception as e:
+        st.error(f"Failed to load symbol universe: {e}")
+        return []
 
 
 # =============================================================================
@@ -224,9 +285,8 @@ def render_sidebar() -> Tuple[str, str, int, int, str, bool]:
 # =============================================================================
 
 
-def render_main_chart():
+def render_main_chart(df: pd.DataFrame, ma_type: str = "SMA"):
     st.subheader("📈 Price & MA Signals (Mock)")
-    df = st.session_state.get("chart_data")
     if df is None or df.empty:
         st.warning("No chart data available.")
         return
@@ -238,9 +298,8 @@ def render_main_chart():
     st.line_chart(chart_df)
 
 
-def render_ma_signals(selected_ma: str):
+def render_ma_signals(df: pd.DataFrame, selected_ma: str):
     st.subheader("⚙️ Strategy Signals (Demo)")
-    df = st.session_state.get("chart_data")
     if df is None or df.empty:
         st.info("Signals will appear once price data is loaded.")
         return
@@ -347,20 +406,25 @@ def render_symbol_selector(key_prefix: str = "sl", container: Any = st) -> str:
     Renders a symbol selector with presets and custom input.
     Loads presets from data/symbol_presets.json.
     """
-    # Load presets from JSON
-    presets = load_symbol_presets()
-    SYMBOL_PRESETS = [p["symbol"] for p in presets] + ["Custom..."]
+    # Load symbols from Universe CSV
+    universe_symbols = load_symbol_universe(UNIVERSE_CSV)
+    
+    if not universe_symbols:
+        # Fallback if universe load fails
+        SYMBOL_PRESETS = ["AAPL", "MSFT", "TSLA", "Custom..."]
+    else:
+        SYMBOL_PRESETS = universe_symbols + ["Custom..."]
     
     # Initialize shared state if not present
     if "shared_symbol_preset" not in st.session_state:
-        st.session_state["shared_symbol_preset"] = SYMBOL_PRESETS[0] if SYMBOL_PRESETS else "AAPL"
+        st.session_state["shared_symbol_preset"] = SYMBOL_PRESETS[0] if SYMBOL_PRESETS else "SMCI"
     if "shared_custom_symbol" not in st.session_state:
         st.session_state["shared_custom_symbol"] = ""
 
     current_preset = st.session_state["shared_symbol_preset"]
     if current_preset not in SYMBOL_PRESETS:
         current_preset = "Custom..." # Fallback if loaded symbol is not in presets
-        st.session_state["shared_custom_symbol"] = st.session_state.get("sl_symbol", SYMBOL_PRESETS[0] if SYMBOL_PRESETS else "AAPL")
+        st.session_state["shared_custom_symbol"] = st.session_state.get("sl_symbol", SYMBOL_PRESETS[0] if SYMBOL_PRESETS else "SMCI")
 
     def on_preset_change():
         st.session_state["shared_symbol_preset"] = st.session_state[f"{key_prefix}_preset_select"]
@@ -387,7 +451,7 @@ def render_symbol_selector(key_prefix: str = "sl", container: Any = st) -> str:
             placeholder="例: 7203.T (トヨタ), 9984.T (ソフトバンクG) など",
             on_change=on_custom_change
         )
-        effective_symbol = custom_symbol.strip() or (SYMBOL_PRESETS[0] if SYMBOL_PRESETS else "AAPL")
+        effective_symbol = custom_symbol.strip() or (SYMBOL_PRESETS[0] if SYMBOL_PRESETS else "SMCI")
     
     return effective_symbol
 
@@ -436,7 +500,68 @@ def render_backtest_ui():
     initial_capital = st.sidebar.number_input("Initial Capital", value=1_000_000, step=100_000)
     commission = st.sidebar.number_input("Commission Rate", value=0.001, step=0.0001, format="%.4f")
     
-    st.sidebar.subheader("Strategy Parameters (MA Cross)")
+    st.sidebar.subheader("Strategy Parameters")
+    
+    # Strategy Template Selection
+    STRATEGY_MAP = {
+        "ma_cross": {"class": MACrossStrategy, "label": "MA Cross", "usable": True},
+        "ema_cross": {"class": EMACrossStrategy, "label": "EMA Cross", "usable": False},
+        "macd_trend": {"class": MACDTrendStrategy, "label": "MACD Trend", "usable": False},
+        "rsi_mean_reversion": {"class": RSIMeanReversionStrategy, "label": "RSI Mean Reversion", "usable": True},
+        "stoch_oscillator": {"class": StochasticOscillatorStrategy, "label": "Stochastic Oscillator", "usable": False},
+        "bollinger_mean_reversion": {"class": BollingerMeanReversionStrategy, "label": "Bollinger Mean Reversion", "usable": False},
+        "bollinger_breakout": {"class": BollingerBreakoutStrategy, "label": "Bollinger Breakout", "usable": False},
+        "donchian_breakout": {"class": DonchianBreakoutStrategy, "label": "Donchian Breakout", "usable": False},
+        "atr_trailing_ma": {"class": ATRTrailingMAStrategy, "label": "ATR Trailing MA", "usable": False},
+        "roc_momentum": {"class": ROCMomentumStrategy, "label": "ROC Momentum", "usable": False},
+    }
+
+    def format_backtest_label(key: str) -> str:
+        cfg = STRATEGY_MAP[key]
+        base = cfg["label"]
+        if cfg.get("usable", False):
+            return f"✔ {base}"
+        else:
+            return f"✖ {base}"
+
+    strategy_template = st.sidebar.selectbox(
+        "Select Strategy Template",
+        options=list(STRATEGY_MAP.keys()),
+        format_func=format_backtest_label,
+        index=0
+    )
+    
+    # Dynamic Parameters
+    strategy_cls = STRATEGY_MAP[strategy_template]["class"]
+    schema = strategy_cls.get_params_schema()
+    
+    params = {}
+    for param_name, config in schema.items():
+        label = config.get("label", param_name)
+        default = config.get("default")
+        
+        # Override default if loaded strategy exists and matches current template
+        if loaded_strat and loaded_strat.get("params") and loaded_strat.get("strategy_type") == strategy_template:
+             default = loaded_strat["params"].get(param_name, default)
+
+        if config["type"] == "int":
+            params[param_name] = st.sidebar.number_input(
+                label, 
+                min_value=config.get("min"), 
+                max_value=config.get("max"), 
+                value=int(default), 
+                step=config.get("step", 1)
+            )
+        elif config["type"] == "float":
+            params[param_name] = st.sidebar.number_input(
+                label, 
+                min_value=config.get("min"), 
+                max_value=config.get("max"), 
+                value=float(default), 
+                step=config.get("step", 0.1),
+                format="%.2f"
+            )
+
     # Widgets will be created AFTER the load logic to avoid StreamlitAPIException
     
     # ==========================================
@@ -452,12 +577,16 @@ def render_backtest_ui():
         # Create display options
         strategy_options = []
         for s in strategies:
-            params = s.get("params", {})
+            s_params = s.get("params", {})
             metrics = s.get("metrics", {})
-            short = params.get("short_window", "?")
-            long = params.get("long_window", "?")
+            
+            # Create a compact parameter string
+            param_str = ",".join([f"{k}={v}" for k, v in s_params.items()])
+            if len(param_str) > 20:
+                param_str = param_str[:20] + "..."
+                
             return_pct = metrics.get("return_pct", 0)
-            label = f"{s['name']} | {s['symbol']} {s['timeframe']} | MA({short},{long}) | Return: {return_pct:.2f}%"
+            label = f"{s['name']} | {s['symbol']} {s['timeframe']} | {s.get('strategy_type', 'ma_cross')} | Return: {return_pct:.2f}%"
             strategy_options.append(label)
         
         col_select, col_load = st.columns([3, 1])
@@ -474,37 +603,33 @@ def render_backtest_ui():
             st.write("")  # Spacer
             if st.button("📂 Load Parameters", key="bt_load_strategy_btn"):
                 selected_strategy = strategies[selected_idx]
-                params = selected_strategy.get("params", {})
+                loaded_params = selected_strategy.get("params", {})
                 
                 # Update session state
                 st.session_state["shared_symbol_preset"] = selected_strategy.get("symbol", "AAPL")
-                st.session_state["bt_short_window"] = params.get("short_window", 9)
-                st.session_state["bt_long_window"] = params.get("long_window", 21)
+                st.session_state["loaded_strategy"] = selected_strategy # Store full object
+                
+                # We can't easily update sidebar widgets for all strategies dynamically here 
+                # without a complex rerun logic or using session state for every param.
+                # For now, we just notify.
                 
                 st.success(f"✅ Loaded strategy: {selected_strategy['name']}")
-                st.info(f"**Parameters:** Symbol={selected_strategy.get('symbol')}, Timeframe={selected_strategy.get('timeframe')}, Short={params.get('short_window')}, Long={params.get('long_window')}")
+                st.info(f"**Parameters:** {loaded_params}")
                 st.rerun()
     else:
         st.info("No strategies saved yet. Go to Strategy Lab to save strategies from optimization results.")
     
     st.markdown("---")
 
-    # Create Sidebar Widgets NOW (after potential session_state updates)
-    short_window = st.sidebar.number_input("Short Window", min_value=1, value=st.session_state.get("bt_short_window", 9), key="bt_short_window")
-    long_window = st.sidebar.number_input("Long Window", min_value=1, value=st.session_state.get("bt_long_window", 21), key="bt_long_window")
-    
     # ==========================================
     # Loaded Strategy Info Display
     # ==========================================
     if strategies:  # Only show if there are saved strategies
         loaded_strat_info = None
         # Check if a strategy was loaded from the section above
-        for s in strategies:
-            if (s.get("symbol") == st.session_state.get("shared_symbol_preset") and
-                s["params"].get("short_window") == st.session_state.get("bt_short_window") and
-                s["params"].get("long_window") == st.session_state.get("bt_long_window")):
-                loaded_strat_info = s
-                break
+        # Simplified check: just check session state
+        if "loaded_strategy" in st.session_state:
+             loaded_strat_info = st.session_state["loaded_strategy"]
         
         if loaded_strat_info:
             with st.expander("📋 Currently Loaded Strategy", expanded=True):
@@ -514,9 +639,10 @@ def render_backtest_ui():
                     st.write(f"**Symbol:** {loaded_strat_info['symbol']}")
                     st.write(f"**Timeframe:** {loaded_strat_info['timeframe']}")
                 with col_info2:
-                    params = loaded_strat_info.get("params", {})
+                    l_params = loaded_strat_info.get("params", {})
                     metrics = loaded_strat_info.get("metrics", {})
-                    st.write(f"**Parameters:** MA({params.get('short_window')}, {params.get('long_window')})")
+                    st.write(f"**Type:** {loaded_strat_info.get('strategy_type', 'ma_cross')}")
+                    st.write(f"**Parameters:** {l_params}")
                     st.write(f"**Return:** {metrics.get('return_pct', 0):.2f}%")
                 
                 if loaded_strat_info.get('description'):
@@ -537,12 +663,10 @@ def render_backtest_ui():
         strategy_options = []
         strategy_map = {}
         for s in strategies:
-            params = s.get("params", {})
+            s_params = s.get("params", {})
             metrics = s.get("metrics", {})
-            short = params.get("short_window", "?")
-            long = params.get("long_window", "?")
             return_pct = metrics.get("return_pct", 0)
-            label = f"{s['name']} | {s['symbol']} {s['timeframe']} | MA({short},{long}) | Return: {return_pct:.2f}%"
+            label = f"{s['name']} | {s['symbol']} {s['timeframe']} | {s.get('strategy_type', 'ma_cross')} | Return: {return_pct:.2f}%"
             strategy_options.append(label)
             strategy_map[label] = s
         
@@ -581,9 +705,9 @@ def render_backtest_ui():
                         comparison_results = []
                         
                         for strategy in selected_strategies:
-                            import requests
+                            # requests is imported globally
                             
-                            params = strategy.get("params", {})
+                            s_params = strategy.get("params", {})
                             payload = {
                                 "symbol": strategy["symbol"],
                                 "timeframe": strategy["timeframe"],
@@ -591,8 +715,8 @@ def render_backtest_ui():
                                 "end_date": end_date.isoformat(),
                                 "initial_capital": initial_capital,
                                 "commission": commission,
-                                "short_window": params.get("short_window", 9),
-                                "long_window": params.get("long_window", 21),
+                                "strategy": strategy.get("strategy_type", "ma_cross"),
+                                "params": s_params
                             }
                             
                             try:
@@ -667,7 +791,7 @@ Comparing multiple strategies with the same symbol, timeframe, and date range.
                                     })
                             
                             if equity_data:
-                                import altair as alt
+                                # import altair as alt (Moved to global scope)
                                 
                                 df_equity = pd.DataFrame(equity_data)
                                 df_equity['date'] = pd.to_datetime(df_equity['date'])
@@ -690,14 +814,18 @@ Comparing multiple strategies with the same symbol, timeframe, and date range.
     st.markdown("---")
     
     # --- Run Backtest Button ---
-    # Input Form (for the submit button)
-    with st.form("backtest_form"):
-        st.markdown("---") # Separator for the button
-        submitted = st.form_submit_button("▶ Run Backtest")
+    if not STRATEGY_MAP[strategy_template].get("usable", False):
+         st.warning("This strategy is not implemented yet.")
+         submitted = False
+    else:
+        # Input Form (for the submit button)
+        with st.form("backtest_form"):
+            st.markdown("---") # Separator for the button
+            submitted = st.form_submit_button("▶ Run Backtest")
 
     if submitted:
         # API Call
-        import requests
+        # requests is imported globally
 
         payload = {
             "symbol": symbol,
@@ -707,14 +835,13 @@ Comparing multiple strategies with the same symbol, timeframe, and date range.
             "initial_capital": initial_capital,
             "commission_rate": commission,
             "position_size": 1.0,
-            "strategy": "ma_cross",
-            "short_window": short_window,
-            "long_window": long_window,
+            "strategy": strategy_template,
+            "params": params,
         }
 
         with st.spinner("Running simulation..."):
             try:
-                response = requests.post("http://localhost:8000/simulate", json=payload)
+                response = requests.post(f"{BACKEND_URL}/simulate", json=payload)
                 response.raise_for_status()
                 result = response.json()
 
@@ -801,8 +928,8 @@ def render_strategy_lab():
             
             timeframe = st.selectbox("Timeframe", options=timeframe_options, index=timeframe_index, key="sl_timeframe")
         with col2:
-            start_date = st.date_input("Start Date", value=datetime(2020, 1, 1), key="sl_start")
-            end_date = st.date_input("End Date", value=datetime(2023, 12, 31), key="sl_end")
+            start_date = st.date_input("Start Date", value=datetime(2025, 1, 1), key="sl_start")
+            end_date = st.date_input("End Date", value=datetime(2025, 12, 31), key="sl_end")
         with col3:
             initial_capital = st.number_input("Initial Capital", value=1_000_000, step=100_000, key="sl_capital")
             commission = st.number_input("Commission Rate", value=0.001, step=0.0001, format="%.4f", key="sl_comm")
@@ -810,15 +937,98 @@ def render_strategy_lab():
     st.markdown("---")
 
     # Strategy Selection
-    strategy_type = st.selectbox(
+    STRATEGY_TEMPLATES = {
+        "ma_cross": {
+            "label": "MA Cross",
+            "supports_optimization": True,
+            "usable": True,
+        },
+        "ema_cross": {
+            "label": "EMA Cross",
+            "supports_optimization": False,
+            "usable": False,
+        },
+        "macd_trend": {
+            "label": "MACD Trend",
+            "supports_optimization": False,
+            "usable": False,
+        },
+        "rsi_mean_reversion": {
+            "label": "RSI Mean Reversion",
+            "supports_optimization": True,
+            "usable": True,
+        },
+        "stoch_oscillator": {
+            "label": "Stochastic Oscillator",
+            "supports_optimization": False,
+            "usable": False,
+        },
+        "bollinger_mean_reversion": {
+            "label": "Bollinger Mean Reversion",
+            "supports_optimization": False,
+            "usable": False,
+        },
+        "bollinger_breakout": {
+            "label": "Bollinger Breakout",
+            "supports_optimization": False,
+            "usable": False,
+        },
+        "donchian_breakout": {
+            "label": "Donchian Breakout",
+            "supports_optimization": False,
+            "usable": False,
+        },
+        "atr_trailing_stop": {
+            "label": "ATR Trailing Stop",
+            "supports_optimization": False,
+            "usable": False,
+        },
+        "price_breakout": {
+            "label": "Price Breakout",
+            "supports_optimization": False,
+            "usable": False,
+        },
+        "roc_momentum": {
+            "label": "ROC Momentum",
+            "supports_optimization": False,
+            "usable": False,
+        },
+    }
+    
+    strategy_keys = list(STRATEGY_TEMPLATES.keys())
+
+    def format_strategy_label(key: str) -> str:
+        cfg = STRATEGY_TEMPLATES[key]
+        base = cfg["label"]
+        if cfg.get("usable", False):
+            return f"✔ {base}"
+        else:
+            return f"✖ {base}"
+
+    selected_strategy_key = st.selectbox(
         "Select Strategy Template",
-        options=["MA Cross", "RSI Reversal", "Breakout"],
-        index=0
+        options=strategy_keys,
+        index=strategy_keys.index("ma_cross"),
+        format_func=format_strategy_label,
     )
+    strategy_cfg = STRATEGY_TEMPLATES[selected_strategy_key]
+    strategy_type = selected_strategy_key
 
     st.subheader("Strategy Parameters")
 
+    if not strategy_cfg.get("usable", False):
+        st.warning("This strategy is not implemented yet.")
+        return
+
+    
+    # Single Column Layout
+    # 1. Strategy Parameters Form
+    # 2. Quick Presets
+    # 3. Strategy Guide (Collapsible)
+
     # Dynamic Form based on selection
+    # Dynamic Form based on selection
+    # We use a form for parameters and analysis execution
     with st.form("strategy_form"):
         # Default values for params - use loaded strategy if available
         if loaded_strategy and loaded_strategy.get("params"):
@@ -834,8 +1044,14 @@ def render_strategy_lab():
         overbought = 70
         lookback_window = 20
         threshold = 1.0
+        
+        # Dictionary to hold parameters for the selected strategy
+        strategy_params = {}
+        
+        submitted_single = False
+        submitted_opt = False
 
-        if strategy_type == "MA Cross":
+        if strategy_type == "ma_cross":
             st.markdown("**Moving Average Crossover**")
             st.caption("Buy when Short MA crosses above Long MA. Sell when Short MA crosses below Long MA.")
             
@@ -848,11 +1064,17 @@ def render_strategy_lab():
                 with col2:
                     long_window = st.number_input("Long Window", min_value=1, max_value=400, value=long_window_default, key="sl_long_single")
                 
-                submitted_single = st.form_submit_button("🚀 Run Single Analysis")
+                strategy_params = {
+                    "short_window": short_window,
+                    "long_window": long_window
+                }
+                
+                st.markdown("---")
+                submitted_single = st.form_submit_button("🚀 Run Strategy Analysis")
             
             with tab_opt:
                 st.markdown("#### Grid Search Optimizer")
-                c1, c2, c3 = st.columns(3)
+                c1, c2 = st.columns(2)
                 with c1:
                     st.markdown("Short Window Range")
                     short_min = st.number_input("Min", value=5, key="s_min")
@@ -863,149 +1085,342 @@ def render_strategy_lab():
                     long_min = st.number_input("Min", value=20, key="l_min")
                     long_max = st.number_input("Max", value=60, key="l_max")
                     long_step = st.number_input("Step", value=5, key="l_step")
-                with c3:
-                    st.info("Total Combinations must be <= 400")
                 
-                submitted_opt = st.form_submit_button("🔍 Run Optimization")
+                # Calculate combinations
+                import math
+                if short_step > 0 and long_step > 0 and short_max >= short_min and long_max >= long_min:
+                    short_count = math.floor((short_max - short_min) / short_step) + 1
+                    long_count = math.floor((long_max - long_min) / long_step) + 1
+                    total_combinations = short_count * long_count
+                else:
+                    total_combinations = 0
+                    
+                # Display with color coding
+                st.markdown("---")
+                color = "green" if 0 < total_combinations <= 400 else "red"
+                st.markdown(f"**Total combinations: <span style='color:{color}'>{total_combinations}</span> (limit: 400)**", unsafe_allow_html=True)
+                
+                if total_combinations > 400:
+                    st.caption("⚠️ Over limit! Please reduce parameter ranges.")
+                elif total_combinations == 0:
+                    st.caption("⚠️ Invalid range settings.")
+                
+                # Disable button if invalid
+                opt_disabled = total_combinations == 0 or total_combinations > 400
+                submitted_opt = st.form_submit_button("🔍 Run Optimization", disabled=opt_disabled)
 
-        elif strategy_type == "RSI Reversal":
-            # ... (existing RSI code)
-            st.markdown("**RSI Reversal**")
+
+
+
+
+        elif strategy_type == "rsi_mean_reversion":
+            st.markdown("**RSI Mean Reversion**")
             st.caption("Buy when RSI crosses below Oversold. Sell when RSI crosses above Overbought.")
             col1, col2, col3 = st.columns(3)
             with col1:
-                rsi_period = st.number_input("RSI Period", min_value=2, value=14)
+                rsi_period = st.number_input("RSI Period", min_value=2, value=14, key="sl_rsi_period")
             with col2:
-                oversold = st.number_input("Oversold Level", min_value=1, max_value=49, value=30)
+                oversold = st.number_input("Oversold Level", min_value=1, max_value=49, value=30, key="sl_rsi_oversold")
             with col3:
-                overbought = st.number_input("Overbought Level", min_value=51, max_value=99, value=70)
+                overbought = st.number_input("Overbought Level", min_value=51, max_value=99, value=70, key="sl_rsi_overbought")
+            
+            strategy_params = {
+                "rsi_period": rsi_period,
+                "oversold": oversold,
+                "overbought": overbought
+            }
+            
+            st.markdown("---")
             submitted_single = st.form_submit_button("🚀 Run Strategy Analysis")
-            submitted_opt = False
+            submitted_opt = False # Optimization handled by generic section if supported
 
-        elif strategy_type == "Breakout":
-            # ... (existing Breakout code)
-            st.markdown("**Breakout Strategy**")
+
+
+        elif strategy_type == "price_breakout":
+            st.markdown("**Price Breakout Strategy**")
             st.caption("Buy when price breaks above N-period high. Sell when price breaks below N-period low.")
             col1, col2 = st.columns(2)
             with col1:
                 lookback_window = st.number_input("Lookback Window", min_value=1, value=20)
             with col2:
+                # threshold is not used in simple PriceBreakout but kept for compatibility or future use
                 threshold = st.number_input("Threshold Multiplier", min_value=1.0, value=1.0, step=0.1)
+            
+            strategy_params = {
+                "lookback": int(lookback_window)
+            }
+            
+            st.markdown("---")
             submitted_single = st.form_submit_button("🚀 Run Strategy Analysis")
-            if submitted_single:
-                # Run single backtest
-                import requests
-                
-                payload = {
-                    "symbol": symbol,
-                    "timeframe": timeframe,
-                    "start_date": start_date.isoformat(),
-                    "end_date": end_date.isoformat(),
-                    "initial_capital": initial_capital,
-                    "commission": commission,
-                    "short_window": int(short_window),
-                    "long_window": int(long_window),
-                }
-                
-                try:
-                    with st.spinner("Running backtest..."):
-                        response = requests.post(f"{BACKEND_URL}/simulate", json=payload, timeout=30)
-                        response.raise_for_status()
-                        result = response.json()
-                    
-                    # Display results
-                    st.success("✅ Backtest completed!")
-                    
-                    col_r1, col_r2, col_r3 = st.columns(3)
-                    with col_r1:
-                        st.metric("Total Return", f"{result['total_return_pct']:.2f}%")
-                    with col_r2:
-                        st.metric("Sharpe Ratio", f"{result['sharpe_ratio']:.2f}")
-                    with col_r3:
-                        st.metric("Max Drawdown", f"{result['max_drawdown_pct']:.2f}%")
-                    
-                    # Equity Curve
-                    if "equity_curve" in result and result["equity_curve"]:
-                        equity_df = pd.DataFrame(result["equity_curve"])
-                        df_equity = equity_df.copy()
-                        df_equity["date"] = pd.to_datetime(df_equity["date"])
-                        df_equity.set_index("date", inplace=True)
-                        st.line_chart(df_equity["equity"])
-                except requests.exceptions.RequestException as e:
-                    st.error(f"Backtest failed: {e}")
+            submitted_opt = False
+            
+        else:
+            # Generic placeholder for other strategies
+            st.info(f"**{strategy_cfg['label']}** selected.")
+            st.warning("Optimization for this strategy is coming soon. Please use the Backtest Lab (Sidebar) for single runs.")
+            submitted_single = False
             submitted_opt = False
 
+    # Fetch Guide Data (Markdown + Presets)
+    guide_markdown = None
+    guide_presets = None
+    
+    try:
+        backend_id = strategy_type
+        response = requests.get(f"{BACKEND_URL}/strategies/{backend_id}/doc", timeout=5)
+        if response.status_code == 200:
+            data = response.json()
+            guide_markdown = data.get("markdown")
+            guide_presets = data.get("presets")
+    except Exception as e:
+        st.error(f"Failed to load guide: {e}")
+
+    # ⚡ Quick Presets Section
+    st.divider()
+    st.markdown("#### ⚡ Quick Presets")
+    
+    if guide_presets:
+        st.caption("Select a preset to automatically load recommended parameters.")
+        
+        # Convert presets dict to list for column layout
+        preset_items = list(guide_presets.items())
+        cols = st.columns(len(preset_items))
+        
+        for i, (key, preset) in enumerate(preset_items):
+            with cols[i]:
+                label = preset.get("label", key)
+                desc = preset.get("description", "")
+                params = preset.get("params", {})
+                
+                if st.button(f"Apply {label}", 
+                            key=f"preset_{strategy_type}_{i}",
+                            help=desc,
+                            on_click=apply_preset_callback,
+                            args=(params, strategy_type)):
+                    pass
+        
+        # Show message if set
+        if "preset_message" in st.session_state:
+            st.success(st.session_state["preset_message"])
+            del st.session_state["preset_message"]
+    else:
+        # Fallback for strategies without presets in frontmatter
+        if strategy_type in STRATEGY_GUIDES:
+             # Legacy fallback
+             guide = STRATEGY_GUIDES[strategy_type]
+             st.caption("Apply recommended parameter sets (Legacy)")
+             cols = st.columns(len(guide.presets))
+             for i, preset in enumerate(guide.presets):
+                with cols[i]:
+                    st.button(f"Apply {preset.label}", 
+                              key=f"preset_{strategy_type}_{i}",
+                              on_click=apply_preset_callback,
+                              args=(preset.params, strategy_type))
+             if "preset_message" in st.session_state:
+                st.success(st.session_state["preset_message"])
+                del st.session_state["preset_message"]
+        else:
+             st.info("Presets not available for this strategy.")
+
+    # 📘 Strategy Guide (Collapsible)
+    st.divider()
+    with st.expander("📘 Trading Strategy Guide (Markdown)"):
+        if guide_markdown:
+            st.markdown(guide_markdown)
+        else:
+            st.warning(f"Guide not found for {strategy_type}")
+            if strategy_type in STRATEGY_GUIDES:
+                 st.info("Showing local summary:")
+                 st.markdown(STRATEGY_GUIDES[strategy_type].overview)
+
     # Handle Actions
-    if strategy_type == "MA Cross":
-        import requests
-        
-        if submitted_single:
-            # API Call for MA Cross Single Run
-            payload = {
-                "symbol": symbol,
-                "timeframe": timeframe,
-                "start_date": start_date.isoformat(),
-                "end_date": end_date.isoformat(),
-                "initial_capital": initial_capital,
-                "commission_rate": commission,
-                "position_size": 1.0,
-                "strategy": "ma_cross",
-                "short_window": short_window,
-                "long_window": long_window,
-            }
+    
+    # Unified Strategy Analysis (Single Run)
+    if submitted_single:
+        # Prepare payload
+        # Use session state to ensure latest values
+        s_date = st.session_state.get("sl_start", start_date)
+        e_date = st.session_state.get("sl_end", end_date)
 
-            with st.spinner("Running MA Cross Backtest..."):
-                try:
-                    response = requests.post("http://localhost:8000/simulate", json=payload)
-                    response.raise_for_status()
-                    result = response.json()
+        payload = {
+            "symbol": symbol,
+            "timeframe": timeframe,
+            "start_date": s_date.isoformat(),
+            "end_date": e_date.isoformat(),
+            "initial_capital": initial_capital,
+            "commission_rate": commission,
+            "position_size": 1.0,
+            "strategy": strategy_type,
+            **strategy_params
+        }
 
-                    st.success("Analysis Completed!")
+        with st.spinner(f"Running {strategy_cfg['label']} Analysis..."):
+            try:
+                response = requests.post(f"{BACKEND_URL}/simulate", json=payload)
+                response.raise_for_status()
+                result = response.json()
 
-                    # Metrics
-                    metrics = result["metrics"]
-                    m1, m2, m3, m4 = st.columns(4)
-                    m1.metric("Total Return", f"{metrics['return_pct']:.2f}%")
-                    m2.metric("Win Rate", f"{metrics['win_rate'] * 100:.1f}%")
-                    m3.metric("Max Drawdown", f"{metrics['max_drawdown'] * 100:.2f}%")
-                    m4.metric("Trades", metrics["trade_count"])
+                st.success("Analysis Completed!")
 
-                    # Equity Curve
-                    st.subheader("Equity Curve")
+                # Metrics
+                metrics = result["metrics"]
+                m1, m2, m3, m4 = st.columns(4)
+                m1.metric("Total Return", f"{metrics['return_pct']:.2f}%")
+                m2.metric("Win Rate", f"{metrics['win_rate'] * 100:.1f}%")
+                m3.metric("Max Drawdown", f"{metrics['max_drawdown'] * 100:.2f}%")
+                m4.metric("Trades", metrics["trade_count"])
+
+                
+                # --- Price & Trade Signals Chart ---
+                if "price_series" in result and result["price_series"]:
+                    # Prepare DataFrames
+                    df_price = pd.DataFrame(result["price_series"])
+                    df_price["date"] = pd.to_datetime(df_price["date"])
+                    
+                    df_trades = pd.DataFrame(result["trades"])
+                    if not df_trades.empty:
+                        df_trades["date"] = pd.to_datetime(df_trades["date"])
+                    
+                    # Equity Data for Shared Scale
                     equity_data = result["equity_curve"]
-                    if equity_data:
-                        df_equity = pd.DataFrame(equity_data)
+                    df_equity = pd.DataFrame(equity_data) if equity_data else pd.DataFrame()
+                    if not df_equity.empty:
                         df_equity["date"] = pd.to_datetime(df_equity["date"])
-                        df_equity.set_index("date", inplace=True)
-                        st.line_chart(df_equity["equity"])
+                        
+                    # Define Shared Scale
+                    if not df_equity.empty:
+                        x_min = df_equity["date"].min()
+                        x_max = df_equity["date"].max()
+                        # Add a small buffer or just use min/max
+                        x_scale = alt.Scale(domain=[x_min, x_max])
                     else:
-                        st.warning("No equity data returned.")
+                        x_scale = alt.Scale() # Default auto
 
-                    # Trades Table
-                    st.subheader("Trade History")
-                    trades_data = result["trades"]
-                    if trades_data:
-                        df_trades = pd.DataFrame(trades_data)
-                        st.dataframe(df_trades, use_container_width=True)
-
-                        # CSV Download
-                        csv = df_trades.to_csv(index=False).encode('utf-8')
-                        st.download_button(
-                            label="📥 Download Trades CSV",
-                            data=csv,
-                            file_name=f"strategy_lab_trades_{symbol}.csv",
-                            mime="text/csv",
+                    # Base Chart with Shared Scale
+                    base = alt.Chart(df_price).encode(
+                        x=alt.X("date:T", title="Date", scale=x_scale)
+                    )
+                    
+                    # Price Line
+                    price_line = base.mark_line().encode(
+                        y=alt.Y("close:Q", title="Price", scale=alt.Scale(zero=False)),
+                        tooltip=["date:T", "close:Q"]
+                    )
+                    
+                    chart_layers = [price_line]
+                    
+                    # Optional MA Lines
+                    if "ma_short" in df_price.columns:
+                        ma_short_line = base.mark_line(strokeDash=[4, 2]).encode(
+                            y=alt.Y("ma_short:Q"),
+                            color=alt.value("#8888ff"),
+                            tooltip=["date:T", "ma_short:Q"]
                         )
+                        chart_layers.append(ma_short_line)
+                        
+                    if "ma_long" in df_price.columns:
+                        ma_long_line = base.mark_line(strokeDash=[2, 2]).encode(
+                            y=alt.Y("ma_long:Q"),
+                            color=alt.value("#ff88ff"),
+                            tooltip=["date:T", "ma_long:Q"]
+                        )
+                        chart_layers.append(ma_long_line)
+                    
+                    # Trade Markers
+                    if not df_trades.empty:
+                        # Buy Markers
+                        buy_trades = df_trades[df_trades["side"] == "BUY"]
+                        if not buy_trades.empty:
+                            buy_markers = alt.Chart(buy_trades).mark_point(
+                                shape="triangle-up",
+                                size=100,
+                                filled=True,
+                                color="green"
+                            ).encode(
+                                x=alt.X("date:T", scale=x_scale),
+                                y="price:Q",
+                                tooltip=["date:T", "price:Q", "side:N", "quantity:Q"]
+                            )
+                            chart_layers.append(buy_markers)
+                        
+                        # Sell Markers
+                        sell_trades = df_trades[df_trades["side"] == "SELL"]
+                        if not sell_trades.empty:
+                            sell_markers = alt.Chart(sell_trades).mark_point(
+                                shape="triangle-down",
+                                size=100,
+                                filled=True,
+                                color="red"
+                            ).encode(
+                                x=alt.X("date:T", scale=x_scale),
+                                y="price:Q",
+                                tooltip=["date:T", "price:Q", "side:N", "quantity:Q", "pnl:Q"]
+                            )
+                            chart_layers.append(sell_markers)
+                    
+                    # Combine Price Chart Layers
+                    price_chart = alt.layer(*chart_layers).properties(
+                        title="Price & Trade Signals",
+                        height=300
+                    )
+                    
+                    # Equity Chart with Shared Scale
+                    if not df_equity.empty:
+                        equity_chart = alt.Chart(df_equity).mark_line(color="green").encode(
+                            x=alt.X("date:T", title="Date", scale=x_scale),
+                            y=alt.Y("equity:Q", title="Equity ($)"),
+                            tooltip=["date:T", "equity:Q"]
+                        ).properties(
+                            title="Equity Curve",
+                            height=200
+                        )
+                        
+                        # Combine Vertically and Sync Scale
+                        combined_chart = alt.vconcat(
+                            price_chart,
+                            equity_chart
+                        ).resolve_scale(
+                            x='shared'
+                        ).interactive()
+                        
+                        st.altair_chart(combined_chart, use_container_width=True)
                     else:
-                        st.info("No trades executed.")
+                        # Fallback if no equity data (shouldn't happen on success)
+                        st.altair_chart(price_chart.interactive(), use_container_width=True)
+                
+                # --- Metrics & Trades ---
+                metrics = result["metrics"]
+                m1, m2, m3, m4 = st.columns(4)
+                m1.metric("Total Return", f"{metrics['return_pct']:.2f}%")
+                m2.metric("Win Rate", f"{metrics['win_rate'] * 100:.1f}%")
+                m3.metric("Max Drawdown", f"{metrics['max_drawdown'] * 100:.2f}%")
+                m4.metric("Trades", metrics["trade_count"])
+                
+                st.subheader("Trade History")
+                trades_data = result["trades"]
+                if trades_data:
+                    df_trades = pd.DataFrame(trades_data)
+                    st.dataframe(df_trades, use_container_width=True)
 
-                except requests.exceptions.RequestException as e:
-                    st.error(f"Backtest failed: {e}")
-                    if e.response is not None:
-                        st.error(f"Details: {e.response.text}")
-        
-        elif submitted_opt:
-            # API Call for Optimization
+                    # CSV Download
+                    csv = df_trades.to_csv(index=False).encode('utf-8')
+                    st.download_button(
+                        label="📥 Download Trades CSV",
+                        data=csv,
+                        file_name=f"strategy_lab_trades_{symbol}.csv",
+                        mime="text/csv",
+                    )
+                else:
+                    st.info("No trades executed.")
+
+            except requests.exceptions.RequestException as e:
+                st.error(f"Backtest failed: {e}")
+                if e.response is not None:
+                    st.error(f"Details: {e.response.text}")
+
+    # MA Cross Specific Optimization (Legacy/Specific Endpoint)
+    if strategy_type == "ma_cross" and submitted_opt:
+            # API Call for MA Cross Optimization
             payload = {
                 "symbol": symbol,
                 "timeframe": timeframe,
@@ -1018,12 +1433,12 @@ def render_strategy_lab():
                 "short_step": short_step,
                 "long_min": long_min,
                 "long_max": long_max,
-                "long_step": long_step
+                "long_step": long_step,
             }
             
-            with st.spinner("Running Optimization..."):
+            with st.spinner("Running MA Cross Optimization..."):
                 try:
-                    response = requests.post("http://localhost:8000/optimize/ma_cross", json=payload)
+                    response = requests.post(f"{BACKEND_URL}/optimize/ma_cross", json=payload)
                     response.raise_for_status()
                     data = response.json()
                     
@@ -1033,209 +1448,494 @@ def render_strategy_lab():
                     if not top_results:
                         st.warning("No valid results found.")
                     else:
+                        # Display Best Params
                         best = top_results[0]
                         best_params = best["params"]
                         best_metrics = best["metrics"]
                         
-                        # Store in session state for persistence
-                        st.session_state["ma_grid_best_params"] = best_params
-                        st.session_state["ma_grid_best_metrics"] = best_metrics
-                        st.session_state["ma_grid_top_results"] = top_results
+                        st.markdown("### 🏆 Best Parameters")
+                        col1, col2, col3, col4 = st.columns(4)
+                        col1.metric("Short Window", best_params.get("short_window"))
+                        col2.metric("Long Window", best_params.get("long_window"))
+                        col3.metric("Total Return", f"{best_metrics['return_pct']:.2f}%")
+                        col4.metric("Sharpe Ratio", f"{best_metrics['sharpe_ratio']:.2f}")
                         
-                        # Prepare Data for Visualization (and store in session state)
+                        # Heatmap
+                        st.subheader("🔥 Performance Heatmap")
                         rows = []
                         for r in top_results:
                             row = r["params"].copy()
                             row.update(r["metrics"])
                             rows.append(row)
                         df_results = pd.DataFrame(rows)
-                        st.session_state["ma_grid_results_df"] = df_results
                         
+                        try:
+                            # import altair as alt (Moved to global scope)
+                            chart = alt.Chart(df_results).mark_rect().encode(
+                                x=alt.X('short_window:O', title='Short Window'),
+                                y=alt.Y('long_window:O', title='Long Window'),
+                                color=alt.Color('return_pct:Q', title='Return %', scale=alt.Scale(scheme='viridis')),
+                                tooltip=['short_window', 'long_window', 'return_pct', 'max_drawdown', 'trade_count']
+                            ).properties(title="Return % by Parameter Combination")
+                            st.altair_chart(chart, use_container_width=True)
+                        except Exception as e:
+                            st.warning(f"Could not render heatmap: {e}")
+                            
+                        # Top Results Table
+                        st.subheader("📊 Top Results")
+                        display_df = df_results.copy()
+                        display_df = display_df.rename(columns={
+                            "short_window": "Short",
+                            "long_window": "Long",
+                            "return_pct": "Return (%)",
+                            "max_drawdown": "Max DD (%)",
+                            "sharpe_ratio": "Sharpe",
+                            "win_rate": "Win Rate",
+                            "trade_count": "Trades"
+                        })
+                        st.dataframe(display_df, use_container_width=True)
+                        
+                        # Save Strategy Logic
+                        st.markdown("---")
+                        st.subheader("💾 Save to Strategy Library")
+                        with st.expander("Save Best Parameters as New Strategy", expanded=False):
+                            with st.form("save_best_strategy_form_ma"):
+                                default_name = f"{symbol}_{timeframe}_MACross_Best"
+                                strategy_name = st.text_input("Strategy Name", value=default_name)
+                                strategy_desc = st.text_area("Description", value=f"Grid Search Result. Return: {best_metrics['return_pct']:.2f}%")
+                                
+                                if st.form_submit_button("💾 Save Strategy"):
+                                    if not strategy_name:
+                                        st.error("Strategy Name is required.")
+                                    else:
+                                        lib = StrategyLibrary()
+                                        new_strategy = {
+                                            "id": str(uuid.uuid4()),
+                                            "name": strategy_name,
+                                            "description": strategy_desc,
+                                            "created_at": datetime.now().isoformat(),
+                                            "symbol": symbol,
+                                            "timeframe": timeframe,
+                                            "strategy_type": "ma_cross",
+                                            "params": best_params,
+                                            "metrics": best_metrics
+                                        }
+                                        lib.save_strategy(new_strategy)
+                                        st.success(f"Strategy '{strategy_name}' saved successfully!")
+
                 except requests.exceptions.RequestException as e:
                     st.error(f"Optimization failed: {e}")
                     if e.response is not None:
                         st.error(f"Details: {e.response.text}")
 
     # ==========================================
-    # Display Results (from Session State)
+    # Generic Optimization Section
     # ==========================================
-    # Check if we have results in session state to display
-    if "ma_grid_best_params" in st.session_state and "ma_grid_best_metrics" in st.session_state:
-        best_params = st.session_state["ma_grid_best_params"]
-        best_metrics = st.session_state["ma_grid_best_metrics"]
-        df_results = st.session_state.get("ma_grid_results_df")
-        
-        # Best Params Card
-        st.markdown("### 🏆 Best Parameters")
-        col1, col2, col3, col4 = st.columns(4)
-        
-        col1.metric(
-            "Short Window", 
-            best_params["short_window"],
-            help="短期の移動平均線の期間（バー数）です。値が小さいほど価格の変化に敏感になります。"
-        )
-        col2.metric(
-            "Long Window", 
-            best_params["long_window"],
-            help="長期の移動平均線の期間（バー数）です。値が大きいほどゆっくりとしたトレンドを捉えます。"
-        )
-        col3.metric(
-            "Total Return", 
-            f"{best_metrics['return_pct']:.2f}%",
-            help="バックテスト期間で、初期資産に対して最終的にどれだけ増えたかの割合です。100%なら資産が2倍、200%なら3倍になったことを意味します。"
-        )
-        col4.metric(
-            "Sharpe Ratio", 
-            f"{best_metrics['sharpe_ratio']:.2f}",
-            help="リスク（リターンのブレ）に対する効率の良さを表す指標です。一般的には 1.0 以上で良好、2.0 以上で非常に優秀とされています。"
-        )
-        
-        # Heatmap
-        st.subheader("🔥 Performance Heatmap")
-        st.caption(
-            "横軸が Short Window、縦軸が Long Window、色が Total Return (%) を表します。"
-            "明るい色ほど成績が良く、暗い色ほど悪い組み合わせです。"
-        )
-        try:
-            import altair as alt
-            
-            if df_results is not None:
-                chart = alt.Chart(df_results).mark_rect().encode(
-                    x=alt.X('short_window:O', title='Short Window'),
-                    y=alt.Y('long_window:O', title='Long Window'),
-                    color=alt.Color('return_pct:Q', title='Return %', scale=alt.Scale(scheme='viridis')),
-                    tooltip=['short_window', 'long_window', 'return_pct', 'max_drawdown', 'trade_count']
-                ).properties(
-                    title="Return % by Parameter Combination"
-                )
-                st.altair_chart(chart, use_container_width=True)
-        except ImportError:
-            st.warning("Altair not installed. Skipping heatmap.")
-        except Exception as e:
-            st.warning(f"Could not render heatmap: {e}")
-            
-        # Results Table
-        st.subheader("📊 Top Results")
-        
-        if df_results is not None:
-            # Prepare Display DataFrame
-            # We use the raw numerical values (df_results) but rename columns for matching config
-            display_df = df_results.copy()
-            display_df = display_df.rename(columns={
-                "short_window": "Short",
-                "long_window": "Long",
-                "total_pnl": "Total PnL",
-                "return_pct": "Total Return (%)",
-                "sharpe_ratio": "Sharpe",
-                "max_drawdown": "Max Drawdown (%)",
-                "win_rate": "Win Rate (%)",
-                "trade_count": "Trades"
-            })
-            
-            # Select specific columns to display
-            cols_to_show = [
-                "Short", "Long", "Total Return (%)", "Sharpe", 
-                "Max Drawdown (%)", "Win Rate (%)", "Trades", "Total PnL"
-            ]
-            # Filter only existing columns (just in case)
-            existing_cols = [c for c in cols_to_show if c in display_df.columns]
-            
-            st.dataframe(
-                display_df[existing_cols],
-                column_config={
-                    "Short": st.column_config.NumberColumn(
-                        "Short",
-                        help="短期の移動平均線の期間（バー数）です。値が小さいほど価格変動に敏感になります。",
-                        format="%d"
-                    ),
-                    "Long": st.column_config.NumberColumn(
-                        "Long",
-                        help="長期の移動平均線の期間（バー数）です。値が大きいほどゆっくりとしたトレンドを捉えます。",
-                        format="%d"
-                    ),
-                    "Total Return (%)": st.column_config.NumberColumn(
-                        "Total Return (%)",
-                        help="バックテスト期間において、初期資産に対してどれだけ増えたかの割合です。100%なら資産が2倍、200%なら3倍です。",
-                        format="%.2f%%"
-                    ),
-                    "Sharpe": st.column_config.NumberColumn(
-                        "Sharpe",
-                        help="リスク（リターンのブレ）に対する効率の良さを表す指標です。一般的には 1.0 以上で良好、2.0 以上で非常に優秀とされます。",
-                        format="%.2f"
-                    ),
-                    "Max Drawdown (%)": st.column_config.NumberColumn(
-                        "Max Drawdown (%)",
-                        help="バックテスト期間中の資産曲線が、ピークからどれだけ大きく落ち込んだか（最大下落率）です。数値が小さいほど安全です。",
-                        format="%.2f%%"
-                    ),
-                    "Win Rate (%)": st.column_config.NumberColumn(
-                        "Win Rate (%)",
-                        help="全トレードのうち、利益が出たトレードの割合です。高いほど勝ちトレードが多いことを意味しますが、リスクリワードとのバランスも重要です。",
-                        format="%.2f%%"
-                    ),
-                    "Trades": st.column_config.NumberColumn(
-                        "Trades",
-                        help="バックテスト期間中に実行されたトレードの回数です。",
-                        format="%d"
-                    ),
-                    "Total PnL": st.column_config.NumberColumn(
-                        "Total PnL",
-                        help="バックテスト期間全体での最終損益（Profit and Loss）です。通貨単位で表示されます。",
-                        format="%d" # Simple integer format, or could use currency symbol if desired
-                    ),
-                },
-                use_container_width=True
-            )
-        
-        # ==========================================
-        # Strategy Library Integration (Save Best)
-        # ==========================================
-        st.markdown("---")
-        st.subheader("💾 Save to Strategy Library")
-        
-        with st.expander("Save Best Parameters as New Strategy", expanded=False):
-            with st.form("save_best_strategy_form"):
-                default_name = f"{symbol}_{timeframe}_MA_{best_params['short_window']}-{best_params['long_window']}_Best"
-                strategy_name = st.text_input("Strategy Name", value=default_name)
-                strategy_desc = st.text_area("Description", value=f"Grid Search Result. Return: {best_metrics['return_pct']:.2f}%")
-                
-                submitted_save = st.form_submit_button("💾 Save Strategy")
-                
-                if submitted_save:
-                    if not strategy_name:
-                        st.error("Strategy Name is required.")
-                    else:
-                        # Use session state values for saving
-                        current_best_params = st.session_state.get("ma_grid_best_params")
-                        current_best_metrics = st.session_state.get("ma_grid_best_metrics")
-                        
-                        if not current_best_params or not current_best_metrics:
-                             st.error("Grid Search results missing. Please run optimization first.")
-                        else:
-                            lib = StrategyLibrary()
-                            new_strategy = {
-                                "id": str(uuid.uuid4()),
-                                "name": strategy_name,
-                                "description": strategy_desc,
-                                "created_at": datetime.now().isoformat(),
-                                "symbol": symbol,
-                                "timeframe": timeframe,
-                                "strategy_type": "ma_cross",
-                                "params": current_best_params,
-                                "metrics": current_best_metrics
-                            }
-                            lib.save_strategy(new_strategy)
-                            st.success(f"Strategy '{strategy_name}' saved successfully!")
+    import numpy as np # Ensure numpy is imported for arange
+    
+    st.subheader("Parameter Optimization (Grid Search)")
 
-    elif submitted_single: # For other strategies
+    if not strategy_cfg.get("supports_optimization", False):
+        st.info(
+            "この戦略はまだパラメータ最適化に対応していません。\n"
+            "Single Run だけ利用できます。（[x] マークの戦略は順次対応予定）"
+        )
+    else:
+        # Optimization Configuration Map
+        OPTIMIZATION_CONFIG = {
+            "ma_cross": {
+                "x_param": "short_window", "y_param": "long_window",
+                "x_label": "Short Window", "y_label": "Long Window",
+                "x_range": [5, 50, 5], "y_range": [20, 200, 10],
+                "fixed": {}
+            },
+            "ema_cross": {
+                "x_param": "short_window", "y_param": "long_window",
+                "x_label": "Short Window (EMA)", "y_label": "Long Window (EMA)",
+                "x_range": [5, 50, 5], "y_range": [20, 200, 10],
+                "fixed": {}
+            },
+            "macd_trend": {
+                "x_param": "fast_period", "y_param": "slow_period",
+                "x_label": "Fast Period", "y_label": "Slow Period",
+                "x_range": [5, 30, 1], "y_range": [20, 60, 2],
+                "fixed": {"signal_period": 9}
+            },
+            "rsi_mean_reversion": {
+                "x_param": "oversold", "y_param": "overbought",
+                "x_label": "Oversold Level", "y_label": "Overbought Level",
+                "x_range": [20, 45, 5], "y_range": [55, 80, 5],
+                "fixed": {"rsi_period": 14}
+            },
+            "bollinger_breakout": {
+                "x_param": "window", "y_param": "num_std",
+                "x_label": "Window", "y_label": "Num Std Dev",
+                "x_range": [10, 50, 5], "y_range": [1.0, 3.0, 0.5],
+                "fixed": {}
+            }
+        }
+        
+        if strategy_type not in OPTIMIZATION_CONFIG:
+            st.info(f"Optimization not yet available for {strategy_type}")
+            submitted_opt = False
+        else:
+            opt_config = OPTIMIZATION_CONFIG[strategy_type]
+            x_param = opt_config["x_param"]
+            y_param = opt_config["y_param"]
+            
+            col_opt1, col_opt2 = st.columns(2)
+            
+            with col_opt1:
+                st.markdown(f"**{opt_config['x_label']} (X-Axis)**")
+                x_min = st.number_input(f"Min {opt_config['x_label']}", value=opt_config["x_range"][0], key="opt_x_min")
+                x_max = st.number_input(f"Max {opt_config['x_label']}", value=opt_config["x_range"][1], key="opt_x_max")
+                x_step = st.number_input(f"Step {opt_config['x_label']}", value=opt_config["x_range"][2], key="opt_x_step")
+                
+            with col_opt2:
+                st.markdown(f"**{opt_config['y_label']} (Y-Axis)**")
+                y_min = st.number_input(f"Min {opt_config['y_label']}", value=opt_config["y_range"][0], key="opt_y_min")
+                y_max = st.number_input(f"Max {opt_config['y_label']}", value=opt_config["y_range"][1], key="opt_y_max")
+                y_step = st.number_input(f"Step {opt_config['y_label']}", value=opt_config["y_range"][2], key="opt_y_step")
+            
+            # Calculate combinations
+            try:
+                if isinstance(x_step, float) or isinstance(opt_config["x_range"][2], float):
+                     x_values = np.arange(x_min, x_max + x_step/100, x_step) # small buffer for float
+                else:
+                     x_values = range(int(x_min), int(x_max) + 1, int(x_step))
+                     
+                if isinstance(y_step, float) or isinstance(opt_config["y_range"][2], float):
+                     y_values = np.arange(y_min, y_max + y_step/100, y_step)
+                else:
+                     y_values = range(int(y_min), int(y_max) + 1, int(y_step))
+                
+                num_combos = len(list(x_values)) * len(list(y_values))
+                st.caption(f"Total Combinations: {num_combos} (Limit: 1000)")
+                
+                if num_combos > 1000:
+                    st.error("Too many combinations! Please increase step size or reduce range.")
+                    submitted_opt = False
+                else:
+                    submitted_opt = st.button("🚀 Run Optimization", key="run_opt_btn")
+            except Exception:
+                st.error("Invalid range parameters")
+                submitted_opt = False
+
+            if submitted_opt:
+                # Prepare generic payload
+                # Convert numpy types to python types for JSON serialization
+                x_list = [float(x) if isinstance(x, (float, np.floating)) else int(x) for x in x_values]
+                y_list = [float(y) if isinstance(y, (float, np.floating)) else int(y) for y in y_values]
+                
+                param_grid = {
+                    x_param: x_list,
+                    y_param: y_list
+                }
+                
+                payload = {
+                    "symbol": symbol,
+                    "timeframe": timeframe,
+                    "start_date": start_date.isoformat(),
+                    "end_date": end_date.isoformat(),
+                    "initial_capital": initial_capital,
+                    "commission_rate": commission,
+                    "strategy_type": strategy_type,
+                    "param_grid": param_grid,
+                    "fixed_params": opt_config["fixed"]
+                }
+                
+                with st.spinner("Running Optimization..."):
+                    try:
+                        response = requests.post(f"{BACKEND_URL}/optimize/generic", json=payload)
+                        response.raise_for_status()
+                        data = response.json()
+                        
+                        st.success(f"Optimization Completed! Tested {data['total_combinations']} combinations.")
+                        
+                        top_results = data["top_results"]
+                        if not top_results:
+                            st.warning("No valid results found.")
+                        else:
+                            best = top_results[0]
+                            best_params = best["params"]
+                            best_metrics = best["metrics"]
+                            
+                            # Store in session state
+                            st.session_state["opt_best_params"] = best_params
+                            st.session_state["opt_best_metrics"] = best_metrics
+                            st.session_state["opt_top_results"] = top_results
+                            st.session_state["opt_strategy_type"] = strategy_type
+                            
+                            # Prepare Data for Visualization
+                            rows = []
+                            for r in top_results:
+                                row = r["params"].copy()
+                                row.update(r["metrics"])
+                                rows.append(row)
+                            df_results = pd.DataFrame(rows)
+                            st.session_state["opt_results_df"] = df_results
+                            
+                    except requests.exceptions.RequestException as e:
+                        st.error(f"Optimization failed: {e}")
+                        if e.response is not None:
+                            st.error(f"Details: {e.response.text}")
+
+        # ==========================================
+        # Display Results (Generic)
+        # ==========================================
+        if "opt_best_params" in st.session_state and "opt_best_metrics" in st.session_state:
+            # Check if results match current strategy type to avoid confusion
+            if st.session_state.get("opt_strategy_type") == strategy_type:
+                best_params = st.session_state["opt_best_params"]
+                best_metrics = st.session_state["opt_best_metrics"]
+                df_results = st.session_state.get("opt_results_df")
+                
+                opt_config = OPTIMIZATION_CONFIG[strategy_type]
+                x_param = opt_config["x_param"]
+                y_param = opt_config["y_param"]
+                
+                # Best Params Card
+                st.markdown("### 🏆 Best Parameters")
+                col1, col2, col3, col4 = st.columns(4)
+                
+                col1.metric(opt_config["x_label"], best_params.get(x_param))
+                col2.metric(opt_config["y_label"], best_params.get(y_param))
+                col3.metric("Total Return", f"{best_metrics['return_pct']:.2f}%")
+                col4.metric("Sharpe Ratio", f"{best_metrics['sharpe_ratio']:.2f}")
+                
+                # Heatmap
+                st.subheader("🔥 Performance Heatmap")
+                try:
+                    # import altair as alt (Moved to global scope)
+                    if df_results is not None:
+                        chart = alt.Chart(df_results).mark_rect().encode(
+                            x=alt.X(f'{x_param}:O', title=opt_config["x_label"]),
+                            y=alt.Y(f'{y_param}:O', title=opt_config["y_label"]),
+                            color=alt.Color('return_pct:Q', title='Return %', scale=alt.Scale(scheme='viridis')),
+                            tooltip=[x_param, y_param, 'return_pct', 'max_drawdown', 'trade_count']
+                        ).properties(title="Return % by Parameter Combination")
+                        st.altair_chart(chart, use_container_width=True)
+                except Exception as e:
+                    st.warning(f"Could not render heatmap: {e}")
+                    
+                # Results Table
+
+    # --- Live Trading Setup (Outside Form) ---
+    if strategy_type == "ma_cross":
+        st.divider()
+        st.subheader("Live Trading Setup")
+        st.caption("Save the current MA Crossover settings as the live trading strategy.")
+
+        position_shares = 0
+        position_amount_jpy = 0
+        
+        position_mode = st.radio(
+            "Position sizing mode",
+            options=["Fixed shares", "Fixed amount (JPY)"],
+            index=1,
+            key="ma_position_mode",
+            horizontal=True
+        )
+        
+        if position_mode == "Fixed shares":
+            position_shares = st.number_input(
+                "Fixed Position Size (shares)", min_value=1, max_value=10000, value=100, step=1, key="ma_fixed_shares"
+            )
+        else:
+            position_amount_jpy = st.number_input(
+                "Amount per trade (JPY)", min_value=10000, max_value=1000000, value=100000, step=10000, key="ma_fixed_amount"
+            )
+
+        if st.button("Set as Live Strategy 🚀", key="set_live_ma"):
+            risk_config = {}
+            if position_mode == "Fixed shares":
+                risk_config = {
+                    "position_mode": "fixed_shares",
+                    "position_value": float(position_shares),
+                }
+            else:
+                risk_config = {
+                    "position_mode": "fixed_amount_jpy",
+                    "position_value": float(position_amount_jpy),
+                }
+                
+            payload = {
+                "symbol": symbol,
+                "timeframe": timeframe,
+                "strategy_name": "MA Crossover",
+                "strategy_type": "ma_cross",
+                "params": {
+                    "short_window": int(short_window),
+                    "long_window": int(long_window),
+                },
+                "risk": risk_config,
+            }
+
+            try:
+                res = requests.post(f"{BACKEND_URL}/live-strategy", json=payload, timeout=10)
+                if res.status_code == 200:
+                    st.success("Live strategy saved successfully! 🎯")
+                else:
+                    st.error(f"Failed to save live strategy: {res.status_code} - {res.text}")
+            except Exception as e:
+                st.error(f"Error while saving live strategy: {e}")
+
+    elif strategy_type == "rsi_mean_reversion":
+        st.divider()
+        st.subheader("Live Trading Setup")
+        st.caption("Save the current RSI settings as the live trading strategy.")
+
+        position_shares = 0
+        position_amount_jpy = 0
+        
+        position_mode = st.radio(
+            "Position sizing mode",
+            options=["Fixed shares", "Fixed amount (JPY)"],
+            index=1,
+            key="rsi_position_mode",
+            horizontal=True
+        )
+        
+        if position_mode == "Fixed shares":
+            position_shares = st.number_input(
+                "Fixed Position Size (shares)", min_value=1, max_value=10000, value=100, step=1, key="rsi_fixed_shares"
+            )
+        else:
+            position_amount_jpy = st.number_input(
+                "Amount per trade (JPY)", min_value=10000, max_value=1000000, value=100000, step=10000, key="rsi_fixed_amount"
+            )
+
+        if st.button("Set as Live Strategy 🚀", key="set_live_rsi"):
+            risk_config = {}
+            if position_mode == "Fixed shares":
+                risk_config = {
+                    "position_mode": "fixed_shares",
+                    "position_value": float(position_shares),
+                }
+            else:
+                risk_config = {
+                    "position_mode": "fixed_amount_jpy",
+                    "position_value": float(position_amount_jpy),
+                }
+
+            payload = {
+                "symbol": symbol,
+                "timeframe": timeframe,
+                "strategy_name": "RSI Mean Reversion",
+                "strategy_type": "rsi_mean_reversion",
+                "params": {
+                    "rsi_period": int(rsi_period),
+                    "oversold_level": int(oversold),
+                    "overbought_level": int(overbought),
+                },
+                "risk": risk_config,
+            }
+
+            try:
+                res = requests.post(f"{BACKEND_URL}/live-strategy", json=payload, timeout=10)
+                if res.status_code == 200:
+                    st.success("Live strategy saved successfully! 🎯")
+                else:
+                    st.error(f"Failed to save live strategy: {res.status_code} - {res.text}")
+            except Exception as e:
+                st.error(f"Error while saving live strategy: {e}")
+                st.subheader("📊 Top Results")
+                if df_results is not None:
+                    display_df = df_results.copy()
+                    # Rename for display
+                    display_df = display_df.rename(columns={
+                        x_param: opt_config["x_label"],
+                        y_param: opt_config["y_label"],
+                        "return_pct": "Return (%)",
+                        "max_drawdown": "Max DD (%)",
+                        "sharpe_ratio": "Sharpe",
+                        "win_rate": "Win Rate",
+                        "trade_count": "Trades"
+                    })
+                    
+                    st.dataframe(display_df, use_container_width=True)
+                
+                # Save Strategy
+                st.markdown("---")
+                st.subheader("💾 Save to Strategy Library")
+                with st.expander("Save Best Parameters as New Strategy", expanded=False):
+                    with st.form("save_best_strategy_form_opt"): # Changed key to avoid conflict
+                        default_name = f"{symbol}_{timeframe}_{strategy_type}_Best"
+                        strategy_name = st.text_input("Strategy Name", value=default_name)
+                        strategy_desc = st.text_area("Description", value=f"Grid Search Result. Return: {best_metrics['return_pct']:.2f}%")
+                        
+                        if st.form_submit_button("💾 Save Strategy"):
+                            if not strategy_name:
+                                st.error("Strategy Name is required.")
+                            else:
+                                lib = StrategyLibrary()
+                                new_strategy = {
+                                    "id": str(uuid.uuid4()),
+                                    "name": strategy_name,
+                                    "description": strategy_desc,
+                                    "created_at": datetime.now().isoformat(),
+                                    "symbol": symbol,
+                                    "timeframe": timeframe,
+                                    "strategy_type": strategy_type,
+                                    "params": best_params,
+                                    "metrics": best_metrics
+                                }
+                                lib.save_strategy(new_strategy)
+                                st.success(f"Strategy '{strategy_name}' saved successfully!")
+
+    if submitted_single and strategy_type not in ["ma_cross", "price_breakout"]: # For other strategies
         # Placeholder for other strategies
-        st.info(f"**{strategy_type}** selected.")
+        st.info(f"**{strategy_label}** selected.")
         st.warning("この戦略タイプの自動バックテストは v0.3 以降で実装予定です。")
         st.write("Parameters captured (for future use):")
-        if strategy_type == "RSI Reversal":
-            st.json({"rsi_period": rsi_period, "oversold": oversold, "overbought": overbought})
-        elif strategy_type == "Breakout":
-            st.json({"lookback_window": lookback_window, "threshold": threshold})
+        if strategy_type == "rsi_mean_reversion":
+            st.json({"period": rsi_period, "buy_level": oversold, "sell_level": overbought})
+            
+            # Run single backtest for RSI
+            # requests is imported globally
+            payload = {
+                "symbol": symbol,
+                "timeframe": timeframe,
+                "start_date": start_date.isoformat(),
+                "end_date": end_date.isoformat(),
+                "initial_capital": initial_capital,
+                "commission": commission,
+                "strategy": "rsi_mean_reversion",
+                "params": {
+                    "period": int(rsi_period),
+                    "buy_level": int(oversold),
+                    "sell_level": int(overbought)
+                }
+            }
+            try:
+                with st.spinner("Running RSI backtest..."):
+                    response = requests.post(f"{BACKEND_URL}/simulate", json=payload, timeout=30)
+                    response.raise_for_status()
+                    result = response.json()
+                
+                # Display results
+                st.success("✅ Backtest completed!")
+                col_r1, col_r2, col_r3 = st.columns(3)
+                with col_r1:
+                    st.metric("Total Return", f"{result['metrics']['return_pct']:.2f}%")
+                with col_r2:
+                    st.metric("Sharpe Ratio", f"{result['metrics']['sharpe_ratio']:.2f}")
+                with col_r3:
+                    st.metric("Max Drawdown", f"{result['metrics']['max_drawdown'] * 100:.2f}%")
+                
+                # Equity Curve
+                if "equity_curve" in result and result["equity_curve"]:
+                    equity_df = pd.DataFrame(result["equity_curve"])
+                    df_equity = equity_df.copy()
+                    df_equity["date"] = pd.to_datetime(df_equity["date"])
+                    df_equity.set_index("date", inplace=True)
+                    st.line_chart(df_equity["equity"])
+            except requests.exceptions.RequestException as e:
+                st.error(f"Backtest failed: {e}")
+
+        elif strategy_type == "price_breakout":
+            # Already handled in the block above
+            pass
             
     # ==========================================
     # Saved Strategies Section
@@ -1539,7 +2239,7 @@ class StrategyLibrary:
 
 
 # =============================================================================
-# Main app
+# Main App Logic
 # =============================================================================
 
 
@@ -1555,17 +2255,28 @@ def fetch_chart_data(symbol: str, timeframe: str, limit: int) -> pd.DataFrame:
 
 def main():
     """Main application with mode switch"""
-    # Page config
+    # Page Config
     st.set_page_config(
-        page_title="EXITON Developer Dashboard",
-        page_icon="📊",
+        page_title="AI Signal Chart - Dev Dashboard",
+        page_icon="📈",
         layout="wide",
+        initial_sidebar_state="expanded",
     )
+
+    # Initialize Session State
+    if "selected_strategy_label" not in st.session_state:
+        st.session_state["selected_strategy_label"] = "MA Cross"
+    if "selected_strategy_type" not in st.session_state:
+        st.session_state["selected_strategy_type"] = "ma_cross"
+    if "single_run_params" not in st.session_state:
+        st.session_state["single_run_params"] = {}
+    if "optimization_params" not in st.session_state:
+        st.session_state["optimization_params"] = {}
 
     # Sidebar mode switch
     mode = st.sidebar.selectbox(
         "Mode",
-        options=["Developer Dashboard", "Backtest Lab", "Strategy Lab"],
+        options=["Developer Dashboard", "Backtest Lab", "Strategy Lab", "Live Signal"],
         index=0,
     )
 
@@ -1580,15 +2291,18 @@ def main():
         # Store in session state
         if "symbol" not in st.session_state or refresh:
             st.session_state.symbol = symbol
-            st.session_state.timeframe = timeframe
-            st.session_state.chart_data = fetch_chart_data(symbol, timeframe, limit)
+        
+        # Mock Data & Chart
+        df = fetch_chart_data(symbol, timeframe, limit)
+        render_main_chart(df, selected_ma)
+        render_ma_signals(df, selected_ma)
+        
+        # Additional metrics (optional)
+        render_account_summary()
+        render_risk_metrics()
 
         # Main content area - 2 columns
         col1, col2 = st.columns([2, 1])
-
-        with col1:
-            render_main_chart()
-            render_ma_signals(selected_ma)
 
         with col2:
             render_account_summary()
@@ -1616,6 +2330,94 @@ def main():
 
     elif mode == "Strategy Lab":
         render_strategy_lab()
+
+    elif mode == "Live Signal":
+        render_live_signal()
+
+
+# =============================================================================
+# Live Signal UI
+# =============================================================================
+
+def render_live_signal():
+    st.title("📡 Live Signal")
+    st.caption("Daily trading signal based on the active live strategy.")
+    
+    try:
+        # Fetch Live Strategy
+        try:
+            strategy_res = requests.get(f"{BACKEND_URL}/live-strategy", timeout=5)
+            if strategy_res.status_code == 404:
+                st.warning("⚠️ Live strategy not set. Please configure it in Strategy Lab.")
+                return
+            strategy_res.raise_for_status()
+            live_strategy = strategy_res.json()
+        except requests.exceptions.RequestException as e:
+            st.error(f"Failed to fetch live strategy: {e}")
+            return
+
+        # Fetch Live Signal
+        with st.spinner("Fetching live signal..."):
+            try:
+                signal_res = requests.get(f"{BACKEND_URL}/live-signal", timeout=10)
+                signal_res.raise_for_status()
+                live_signal = signal_res.json()
+            except requests.exceptions.RequestException as e:
+                st.error(f"Failed to fetch live signal: {e}")
+                if e.response is not None:
+                    st.error(f"Details: {e.response.text}")
+                return
+
+        # Display
+        col1, col2 = st.columns([1, 2])
+        
+        with col1:
+            st.subheader("Strategy Overview")
+            st.info(f"**Symbol:** {live_strategy['symbol']} ({live_strategy['timeframe']})")
+            st.write(f"**Strategy:** {live_strategy['strategy_name']}")
+            st.write(f"**Type:** {live_strategy['strategy_type']}")
+            st.json(live_strategy['params'], expanded=False)
+            
+            st.markdown("---")
+            st.write("**Risk Settings**")
+            risk = live_strategy['risk']
+            if risk['position_mode'] == 'fixed_shares':
+                st.write(f"Mode: Fixed Shares")
+                st.write(f"Value: {risk['position_value']} shares")
+            else:
+                st.write(f"Mode: Fixed Amount (JPY)")
+                st.write(f"Value: ¥{risk['position_value']:,.0f}")
+
+        with col2:
+            st.subheader("Today's Signal")
+            
+            signal = live_signal['signal']
+            color = "gray"
+            if signal == "BUY": color = "green"
+            elif signal == "SELL": color = "red"
+            
+            st.markdown(
+                f"""
+                <div style="text-align: center; padding: 20px; border: 2px solid {color}; border-radius: 10px; background-color: rgba(0,0,0,0.05);">
+                    <h1 style="color: {color}; font-size: 72px; margin: 0;">{signal}</h1>
+                    <p style="font-size: 24px;">Latest Price: <strong>{live_signal['latest_price']:,.2f}</strong></p>
+                    <p style="font-size: 18px; color: #666;">{live_signal['timestamp']}</p>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+            
+            st.markdown("### 📦 Suggested Order")
+            shares = live_signal['risk']['suggested_shares']
+            st.metric("Quantity", f"{shares} shares")
+            
+            est_value = shares * live_signal['latest_price']
+            st.caption(f"Estimated Value: ¥{est_value:,.0f}")
+            
+            st.info("💡 After placing the order in your brokerage app, please record the actual trade in the 'Trade Log' (coming soon).")
+
+    except Exception as e:
+        st.error(f"An unexpected error occurred: {e}")
 
 
 if __name__ == "__main__":

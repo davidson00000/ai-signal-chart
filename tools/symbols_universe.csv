@@ -1,15 +1,11 @@
 symbol,note
-AAPL,Apple Inc
-MSFT,Microsoft
-NVDA,NVIDIA
+SMCI,Supermicro
+HOOD,Robinhood
+PLTR,Palantir
+MU,Micron
+WDC,Western Digital
 AMD,Advanced Micro Devices
-AMZN,Amazon
-META,Meta Platforms
-GOOGL,Alphabet Class A
-TSLA,Tesla
-NFLX,Netflix
-AVGO,Broadcom
-SPY,SPDR S&P500 ETF
-QQQ,Invesco QQQ Trust
-VOO,Vanguard S&P500 ETF
-SSO,ProShares Ultra S&P500
+NVDA,Nvidia
+ALB,Albemarle Corp (Lithium)
+VST,Vistra Corp (Energy)
+COIN,Coinbase

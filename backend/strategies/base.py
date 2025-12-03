@@ -1,56 +1,59 @@
-"""
-Base strategy class for backtesting.
-All concrete strategies must implement `generate_signals(df)` which returns
-a pandas Series of signals (+1, -1, 0).
-"""
-
 from abc import ABC, abstractmethod
+from typing import Dict, Any
 import pandas as pd
-import numpy as np
 
-
-class BaseStrategy(ABC):
+class StrategyBase(ABC):
     """
-    抽象戦略基底クラス。
-
-    すべての戦略は generate_signals(df: pd.DataFrame) -> pd.Series を実装する必要がある。
+    Abstract base class for all trading strategies.
     """
 
-    def __init__(self):
-        """
-        基本的な初期化。サブクラスで super().__init__() を呼び出す必要はない。
-        """
-        pass
+    def __init__(self, **params):
+        self.params = params
 
     @abstractmethod
     def generate_signals(self, df: pd.DataFrame) -> pd.Series:
         """
-        売買シグナルを生成する（抽象メソッド）。
-
+        Generate trading signals based on the strategy logic.
+        
         Args:
-            df: OHLCV データを含む DataFrame（少なくとも 'close' カラムが必要）
-
+            df (pd.DataFrame): Historical price data with columns like 'open', 'high', 'low', 'close', 'volume'.
+                               Index should be datetime or compatible.
+        
         Returns:
-            pd.Series: シグナル (1 = ロング, -1 = ショート/売り, 0 = ノーポジション)
+            pd.Series: A series of signals (1 for Buy, 0 for Hold/Exit, -1 for Sell if applicable, though spec says 1/0).
+                       The spec says: "Entry condition (BUY = 1), EXIT condition (0)".
         """
-        raise NotImplementedError("Strategy must implement generate_signals()")
+        pass
 
-    def generate(self, df: pd.DataFrame) -> pd.Series:
+    @classmethod
+    @abstractmethod
+    def get_params_schema(cls) -> Dict[str, Any]:
         """
-        BacktestEngine との互換性のため、generate() も提供。
-        デフォルトでは generate_signals() を呼び出す。
+        Return the schema for the strategy parameters to generate UI inputs.
+        
+        Returns:
+            Dict[str, Any]: A dictionary defining the parameters.
+            Example:
+            {
+                "short_window": {"type": "int", "min": 1, "max": 200, "default": 10, "step": 1, "label": "Short Window"},
+                "threshold": {"type": "float", "min": 0.0, "max": 10.0, "default": 1.0, "step": 0.1, "label": "Threshold"}
+            }
         """
-        return self.generate_signals(df)
+        pass
 
-    def validate_dataframe(self, df: pd.DataFrame) -> None:
+    @classmethod
+    def get_optimization_config(cls) -> Dict[str, Any]:
         """
-        DataFrame の基本的な検証。
-
-        Args:
-            df: 検証する DataFrame
-
-        Raises:
-            ValueError: DataFrame が空、または基本要件を満たさない場合
+        Return the default configuration for parameter optimization (2D grid search).
+        
+        Returns:
+            Dict[str, Any]: Configuration for X and Y axes.
+            Example:
+            {
+                "x_param": "short_window",
+                "y_param": "long_window",
+                "x_range": {"min": 5, "max": 50, "step": 5},
+                "y_range": {"min": 20, "max": 200, "step": 10}
+            }
         """
-        if df is None or df.empty:
-            raise ValueError("DataFrame is empty or None")
+        return {}
