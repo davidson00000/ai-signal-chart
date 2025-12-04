@@ -12,6 +12,7 @@ from backend.strategies.bollinger_breakout import BollingerBreakoutStrategy
 from backend.strategies.donchian_breakout import DonchianBreakoutStrategy
 from backend.strategies.atr_trailing_ma import ATRTrailingMAStrategy
 from backend.strategies.roc_momentum import ROCMomentumStrategy
+from backend.strategies.ema9_dip_buy import EMA9DipBuyStrategy
 
 __all__ = [
     "StrategyBase",
@@ -24,5 +25,6 @@ __all__ = [
     "BollingerBreakoutStrategy",
     "DonchianBreakoutStrategy",
     "ATRTrailingMAStrategy",
-    "ROCMomentumStrategy"
+    "ROCMomentumStrategy",
+    "EMA9DipBuyStrategy"
 ]

@@ -18,6 +18,73 @@ import altair as alt
 from datetime import datetime, timedelta
 import uuid
 from strategy_guides import STRATEGY_GUIDES
+
+# ============================================================================
+# Global Constants
+# ============================================================================
+
+STRATEGY_TEMPLATES = {
+    "ma_cross": {
+        "label": "MA Cross",
+        "supports_optimization": True,
+        "usable": True,
+    },
+    "ema_cross": {
+        "label": "EMA Cross",
+        "supports_optimization": False,
+        "usable": False,
+    },
+    "macd_trend": {
+        "label": "MACD Trend",
+        "supports_optimization": False,
+        "usable": False,
+    },
+    "rsi_mean_reversion": {
+        "label": "RSI Mean Reversion",
+        "supports_optimization": True,
+        "usable": True,
+    },
+    "stoch_oscillator": {
+        "label": "Stochastic Oscillator",
+        "supports_optimization": False,
+        "usable": False,
+    },
+    "bollinger_mean_reversion": {
+        "label": "Bollinger Mean Reversion",
+        "supports_optimization": False,
+        "usable": False,
+    },
+    "bollinger_breakout": {
+        "label": "Bollinger Breakout",
+        "supports_optimization": False,
+        "usable": False,
+    },
+    "donchian_breakout": {
+        "label": "Donchian Breakout",
+        "supports_optimization": False,
+        "usable": False,
+    },
+    "atr_trailing_stop": {
+        "label": "ATR Trailing Stop",
+        "supports_optimization": False,
+        "usable": False,
+    },
+    "price_breakout": {
+        "label": "Price Breakout",
+        "supports_optimization": False,
+        "usable": False,
+    },
+    "roc_momentum": {
+        "label": "ROC Momentum",
+        "supports_optimization": False,
+        "usable": False,
+    },
+    "ema9_dip_buy": {
+        "label": "EMA9 Dip Buy",
+        "supports_optimization": True,
+        "usable": True,
+    },
+}
 import os
 import json
 from typing import Any, Dict, List, Tuple
@@ -39,12 +106,19 @@ def apply_preset_callback(preset_params, strategy_type):
     for p_key, p_val in preset_params.items():
         ss_key = None
         if strategy_type == "ma_cross":
-            if p_key == "short_window": ss_key = "sl_short_single"
-            if p_key == "long_window": ss_key = "sl_long_single"
+            if p_key == "short_window": ss_key = "sl_ma_short"
+            if p_key == "long_window": ss_key = "sl_ma_long"
         elif strategy_type == "rsi_mean_reversion":
             if p_key == "rsi_period": ss_key = "sl_rsi_period"
             if p_key == "oversold": ss_key = "sl_rsi_oversold"
             if p_key == "overbought": ss_key = "sl_rsi_overbought"
+        elif strategy_type == "ema9_dip_buy":
+            if p_key == "ema_fast": ss_key = "sl_ema9_fast"
+            if p_key == "ema_slow": ss_key = "sl_ema9_slow"
+            if p_key == "deviation_threshold": ss_key = "sl_ema9_dev"
+            if p_key == "stop_buffer": ss_key = "sl_ema9_stop"
+            if p_key == "risk_reward": ss_key = "sl_ema9_rr"
+            if p_key == "lookback_volume": ss_key = "sl_ema9_vol"
         
         if ss_key:
             st.session_state[ss_key] = p_val
@@ -775,20 +849,46 @@ Comparing multiple strategies with the same symbol, timeframe, and date range.
                             best_name = df_comparison.loc[best_idx, "Name"]
                             best_return = df_comparison.loc[best_idx, "Return (%)"]
                             st.success(f"🏆 Best Performer: **{best_name}** with {best_return}% return")
+                            # Best Parameters
+                        best_res = top_results[0]
+                        st.info(f"**Best Parameters (Composite Score)**: Short={best_res['short']}, Long={best_res['long']} (Score: {best_res.get('score', 0):.2f})")
+                        
+                        # Heatmap Data Preparation
+                        # We need a pivot table of Short vs Long with Score as value
+                        df_opt = pd.DataFrame(top_results)
+                        
+                        # Ensure we have data for heatmap
+                        if not df_opt.empty:
+                            heatmap_data = df_opt.pivot_table(
+                                index="short", 
+                                columns="long", 
+                                values="score",
+                                aggfunc="max" # In case of duplicates, take max score
+                            )
                             
-                            # Equity Curve Overlay Chart
-                            st.markdown("##### Equity Curve Comparison")
+                            st.subheader("Parameter Heatmap (Score)")
+                            st.write("Score = Sharpe * 2.0 + Return * 0.5 (Penalties for low trades/high DD)")
                             
-                            # Prepare data for overlay
-                            equity_data = []
-                            for cr in comparison_results:
-                                equity_curve = cr["result"].get("equity_curve", [])
-                                for point in equity_curve:
-                                    equity_data.append({
-                                        "date": point["date"],
-                                        "equity": point["equity"],
-                                        "strategy": cr["name"]
-                                    })
+                            fig, ax = plt.subplots(figsize=(10, 8))
+                            sns.heatmap(heatmap_data, annot=True, fmt=".1f", cmap="RdYlGn", ax=ax)
+                            st.pyplot(fig)
+                        
+                        # Top Results Table
+                        st.subheader("Top Results (Sorted by Score)")
+                        st.dataframe(df_opt[["short", "long", "score", "return_pct", "sharpe", "max_dd", "trades"]], use_container_width=True)
+                        # Equity Curve Overlay Chart
+                        st.markdown("##### Equity Curve Comparison")
+                        
+                        # Prepare data for overlay
+                        equity_data = []
+                        for cr in comparison_results:
+                            equity_curve = cr["result"].get("equity_curve", [])
+                            for point in equity_curve:
+                                equity_data.append({
+                                    "date": point["date"],
+                                    "equity": point["equity"],
+                                    "strategy": cr["name"]
+                                })
                             
                             if equity_data:
                                 # import altair as alt (Moved to global scope)
@@ -900,11 +1000,36 @@ Comparing multiple strategies with the same symbol, timeframe, and date range.
 
 def render_strategy_lab():
     """
-    Render the Strategy Lab UI (v0.2).
-    Allows users to select strategy templates, input parameters, and run backtests (MA Cross only).
+    Render the Strategy Lab UI (v0.3 - Sectioned).
+    Allows users to navigate between different sections via sidebar.
     """
     st.title("🧪 Strategy Lab")
     st.caption("Design and test algorithmic strategies.")
+    
+    # Get current section from sidebar (set via main.py sidebar)
+    lab_section = st.session_state.get("sl_section", "Configuration")
+    
+    # Route to appropriate section
+    if lab_section == "Configuration":
+        render_configuration_section()
+    elif lab_section == "Single Analysis":
+        render_single_analysis_section()
+    elif lab_section == "Parameter Optimization":
+        render_parameter_optimization_section()
+    elif lab_section == "Saved Strategies":
+        render_saved_strategies_section()
+    elif lab_section == "Symbol Preset Settings":
+        render_symbol_preset_section()
+
+
+# ============================================================================
+# Strategy Lab Section Renderers
+# ============================================================================
+
+def render_configuration_section():
+    """Configuration section - Market data, capital, strategy template selection"""
+    st.header("⚙️ Configuration")
+    st.caption("Select market, timeframe, capital settings and the strategy template to analyze.")
 
     # Check if a strategy was loaded
     loaded_strategy = st.session_state.get("strategy_lab_loaded_strategy")
@@ -937,83 +1062,915 @@ def render_strategy_lab():
     st.markdown("---")
 
     # Strategy Selection
-    STRATEGY_TEMPLATES = {
-        "ma_cross": {
-            "label": "MA Cross",
-            "supports_optimization": True,
-            "usable": True,
-        },
-        "ema_cross": {
-            "label": "EMA Cross",
-            "supports_optimization": False,
-            "usable": False,
-        },
-        "macd_trend": {
-            "label": "MACD Trend",
-            "supports_optimization": False,
-            "usable": False,
-        },
-        "rsi_mean_reversion": {
-            "label": "RSI Mean Reversion",
-            "supports_optimization": True,
-            "usable": True,
-        },
-        "stoch_oscillator": {
-            "label": "Stochastic Oscillator",
-            "supports_optimization": False,
-            "usable": False,
-        },
-        "bollinger_mean_reversion": {
-            "label": "Bollinger Mean Reversion",
-            "supports_optimization": False,
-            "usable": False,
-        },
-        "bollinger_breakout": {
-            "label": "Bollinger Breakout",
-            "supports_optimization": False,
-            "usable": False,
-        },
-        "donchian_breakout": {
-            "label": "Donchian Breakout",
-            "supports_optimization": False,
-            "usable": False,
-        },
-        "atr_trailing_stop": {
-            "label": "ATR Trailing Stop",
-            "supports_optimization": False,
-            "usable": False,
-        },
-        "price_breakout": {
-            "label": "Price Breakout",
-            "supports_optimization": False,
-            "usable": False,
-        },
-        "roc_momentum": {
-            "label": "ROC Momentum",
-            "supports_optimization": False,
-            "usable": False,
-        },
-    }
     
     strategy_keys = list(STRATEGY_TEMPLATES.keys())
 
     def format_strategy_label(key: str) -> str:
         cfg = STRATEGY_TEMPLATES[key]
         base = cfg["label"]
-        if cfg.get("usable", False):
-            return f"✔ {base}"
-        else:
-            return f"✖ {base}"
+        return f"✔ {base}" if cfg.get("usable", False) else f"✖ {base}"
+
+    # Determine default strategy to show
+    default_strategy_key = st.session_state.get("persisted_strategy_type")
+
+    # If user loaded a saved strategy (from Saved Strategies section), override
+    loaded_strategy = st.session_state.get("strategy_lab_loaded_strategy")
+    if loaded_strategy and loaded_strategy.get("strategy_type") in strategy_keys:
+        default_strategy_key = loaded_strategy["strategy_type"]
+
+    # Final fallback
+    if default_strategy_key not in strategy_keys:
+        default_strategy_key = "ma_cross"
+
+    default_index = strategy_keys.index(default_strategy_key)
 
     selected_strategy_key = st.selectbox(
         "Select Strategy Template",
         options=strategy_keys,
-        index=strategy_keys.index("ma_cross"),
+        index=default_index,
         format_func=format_strategy_label,
+        key="sl_strategy_type"
     )
-    strategy_cfg = STRATEGY_TEMPLATES[selected_strategy_key]
-    strategy_type = selected_strategy_key
 
+    # Final strategy for use in Single Analysis / Optimization
+    strategy_type = selected_strategy_key
+    strategy_cfg = STRATEGY_TEMPLATES[strategy_type]
+
+    # Persist for next time
+    st.session_state["persisted_strategy_type"] = strategy_type
+    st.session_state["sl_strategy_cfg"] = strategy_cfg
+    st.session_state["sl_symbol"] = symbol
+    
+    # Info message
+    st.info(f"✅ Configuration saved. Navigate to **Single Analysis** or **Parameter Optimization** to run backtests.")
+
+
+def render_single_analysis_section():
+    """Single Analysis section - Run single backtests with specific parameters"""
+    st.header("📊 Single Analysis")
+    st.caption("Run a single backtest with specific parameter values.")
+    
+    # Get configuration from session state (use persistent key)
+    strategy_type = st.session_state.get("persisted_strategy_type", "ma_cross")
+    symbol = st.session_state.get("sl_symbol", "AAPL")
+    timeframe = st.session_state.get("sl_timeframe", "1d")
+    start_date = st.session_state.get("sl_start", datetime(2025, 1, 1))
+    end_date = st.session_state.get("sl_end", datetime(2025, 12, 31))
+    initial_capital = st.session_state.get("sl_capital", 1_000_000)
+    commission = st.session_state.get("sl_comm", 0.001)
+    
+    # Check if strategy is usable
+    STRATEGY_TEMPLATES = {
+        "ma_cross": {"label": "MA Cross", "usable": True},
+        "rsi_mean_reversion": {"label": "RSI Mean Reversion", "usable": True},
+        "ema9_dip_buy": {"label": "EMA9 Dip Buy", "usable": True},
+    }
+    strategy_cfg = STRATEGY_TEMPLATES.get(strategy_type, {"label": strategy_type, "usable": False})
+    
+    if not strategy_cfg.get("usable", False):
+        st.warning("⚠️ This strategy is not implemented yet. Please select a different strategy in Configuration.")
+        return
+    
+    # Quick Presets (Moved outside form to allow callbacks)
+    st.markdown("#### ⚡ Quick Presets")
+    
+    # Get presets from STRATEGY_GUIDES
+    guide = STRATEGY_GUIDES.get(strategy_type)
+    if guide and guide.presets:
+        cols = st.columns(len(guide.presets))
+        for i, preset in enumerate(guide.presets):
+            with cols[i]:
+                st.button(
+                    f"Apply {preset.label}", 
+                    key=f"sl_preset_{strategy_type}_{i}",
+                    help=getattr(preset, "description", None),
+                    on_click=apply_preset_callback,
+                    args=(preset.params, strategy_type)
+                )
+        
+        if "preset_message" in st.session_state:
+            st.success(st.session_state["preset_message"])
+            del st.session_state["preset_message"]
+    else:
+        st.info("No presets available for this strategy.")
+    
+    st.markdown("---")
+    
+    # Strategy Parameters Form
+    with st.form("strategy_form"):
+        st.subheader("Strategy Parameters")
+        
+        strategy_params = {}
+        submitted_single = False
+        
+        # MA Cross Strategy
+        if strategy_type == "ma_cross":
+            st.markdown("**Moving Average Crossover**")
+            st.caption("Buy when Short MA crosses above Long MA. Sell when Short MA crosses below Long MA.")
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                short_window = st.number_input("Short Window", min_value=1, max_value=200, value=st.session_state.get("sl_ma_short", 9), key="sl_ma_short")
+            with col2:
+                long_window = st.number_input("Long Window", min_value=1, max_value=400, value=st.session_state.get("sl_ma_long", 21), key="sl_ma_long")
+            
+            strategy_params = {
+                "short_window": short_window,
+                "long_window": long_window
+            }
+        
+        # RSI Mean Reversion
+        elif strategy_type == "rsi_mean_reversion":
+            st.markdown("**RSI Mean Reversion**")
+            st.caption("Buy when RSI crosses below Oversold. Sell when RSI crosses above Overbought.")
+            
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                rsi_period = st.number_input("RSI Period", min_value=2, value=st.session_state.get("sl_rsi_period", 14), key="sl_rsi_period")
+            with col2:
+                oversold = st.number_input("Oversold Level", min_value=1, max_value=49, value=st.session_state.get("sl_rsi_oversold", 30), key="sl_rsi_oversold")
+            with col3:
+                overbought = st.number_input("Overbought Level", min_value=51, max_value=99, value=st.session_state.get("sl_rsi_overbought", 70), key="sl_rsi_overbought")
+            
+            strategy_params = {
+                "rsi_period": rsi_period,
+                "oversold": oversold,
+                "overbought": overbought
+            }
+        
+        # EMA9 Dip Buy
+        elif strategy_type == "ema9_dip_buy":
+            st.markdown("**EMA9 Dip Buy**")
+            st.caption("Long-only pullback strategy. Buys dips near 9EMA in strong uptrends with volume confirmation.")
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                ema_fast = st.number_input("Fast EMA Period", min_value=5, max_value=20, value=st.session_state.get("sl_ema9_fast", 9), key="sl_ema9_fast")
+                deviation_threshold = st.number_input("Deviation Threshold %", min_value=0.5, max_value=5.0, value=st.session_state.get("sl_ema9_dev", 2.0), step=0.5, key="sl_ema9_dev")
+                stop_buffer = st.number_input("Stop Loss Buffer %", min_value=0.1, max_value=2.0, value=st.session_state.get("sl_ema9_stop", 0.5), step=0.1, key="sl_ema9_stop")
+            with col2:
+                ema_slow = st.number_input("Slow EMA Period", min_value=10, max_value=50, value=st.session_state.get("sl_ema9_slow", 21), key="sl_ema9_slow")
+                risk_reward = st.number_input("Risk/Reward Ratio", min_value=1.0, max_value=5.0, value=st.session_state.get("sl_ema9_rr", 2.0), step=0.5, key="sl_ema9_rr")
+                lookback_volume = st.number_input("Volume Lookback", min_value=10, max_value=50, value=st.session_state.get("sl_ema9_vol", 20), step=5, key="sl_ema9_vol")
+            
+            strategy_params = {
+                "ema_fast": ema_fast,
+                "ema_slow": ema_slow,
+                "deviation_threshold": deviation_threshold,
+                "stop_buffer": stop_buffer,
+                "risk_reward": risk_reward,
+                "lookback_volume": lookback_volume
+            }
+        
+        else:
+            st.error(f"Unknown strategy: {strategy_type}")
+            return
+        
+        st.markdown("---")
+        submitted_single = st.form_submit_button("🚀 Run Strategy Analysis")
+    
+    # Execute Single Run
+    if submitted_single:
+        payload = {
+            "symbol": symbol,
+            "timeframe": timeframe,
+            "start_date": start_date.isoformat() if hasattr(start_date, 'isoformat') else str(start_date),
+            "end_date": end_date.isoformat() if hasattr(end_date, 'isoformat') else str(end_date),
+            "initial_capital": initial_capital,
+            "commission_rate": commission,
+            "position_size": 1.0,
+            "strategy": strategy_type,
+            **strategy_params
+        }
+        
+        with st.spinner(f"Running {strategy_cfg['label']} Analysis..."):
+            try:
+                response = requests.post(f"{BACKEND_URL}/simulate", json=payload)
+                response.raise_for_status()
+                result = response.json()
+                
+                st.success("✅ Analysis Completed!")
+                
+                # Metrics
+                metrics = result.get("metrics", {})
+                col1, col2, col3, col4 = st.columns(4)
+                col1.metric("Total Return", f"{metrics.get('return_pct', 0):.2f}%")
+                col2.metric("Sharpe Ratio", f"{metrics.get('sharpe_ratio', 0):.2f}")
+                col3.metric("Max Drawdown", f"{metrics.get('max_drawdown', 0)*100:.2f}%")
+                col4.metric("Trades", metrics.get('trade_count', 0))
+                
+                # Prepare shared x-axis domain
+                price_series = result.get("price_series", [])
+                equity_data = result.get("equity_curve", [])
+                
+                domain = None
+                if price_series:
+                    df_price = pd.DataFrame(price_series)
+                    df_price["date"] = pd.to_datetime(df_price["date"])
+                    
+                    # FIX: Clean data to avoid Altair warnings
+                    numeric_cols = ["close", "ma_short", "ma_long"]
+                    for col in numeric_cols:
+                        if col in df_price.columns:
+                            df_price[col] = pd.to_numeric(df_price[col], errors='coerce')
+                    df_price = df_price.dropna(subset=["date"])
+                    
+                    min_date = df_price["date"].min()
+                    max_date = df_price["date"].max()
+                    domain = [min_date, max_date]
+                
+                # --- Build Equity Chart ---
+                equity_chart = None
+                if equity_data:
+                    df_equity = pd.DataFrame(equity_data)
+                    if "date" in df_equity.columns:
+                        df_equity["date"] = pd.to_datetime(df_equity["date"])
+                    
+                    # FIX: Clean equity data
+                    if "equity" in df_equity.columns:
+                        df_equity["equity"] = pd.to_numeric(df_equity["equity"], errors='coerce')
+                        df_equity = df_equity.dropna(subset=["date", "equity"])
+                    
+                    equity_chart = alt.Chart(df_equity).mark_line(color='#29b5e8').encode(
+                        x=alt.X('date:T', title=None, axis=alt.Axis(labels=False)), # Hide x-axis labels for top chart
+                        y=alt.Y('equity:Q', title="Equity", scale=alt.Scale(zero=False)),
+                        tooltip=['date', 'equity']
+                    ).properties(
+                        height=200,
+                        title="Equity Curve"
+                    )
+                else:
+                    st.warning("No equity data returned.")
+                
+                # --- Build Price & Signals Chart ---
+                price_chart = None
+                trades_data = result.get("trades", [])
+                
+                if price_series:
+                    # Base chart
+                    base = alt.Chart(df_price).encode(
+                        x=alt.X('date:T', title="Date")
+                    )
+                    
+                    # Price Line
+                    line = base.mark_line(color='gray', opacity=0.5).encode(y=alt.Y('close:Q', title="Price", scale=alt.Scale(zero=False)))
+                    
+                    # Indicators (MA)
+                    layers = [line]
+                    if "ma_short" in df_price.columns:
+                        ma_short = base.mark_line(color='orange').encode(y='ma_short:Q')
+                        layers.append(ma_short)
+                    if "ma_long" in df_price.columns:
+                        ma_long = base.mark_line(color='blue').encode(y='ma_long:Q')
+                        layers.append(ma_long)
+                    
+                    # Trade Signals
+                    if trades_data:
+                        df_trades = pd.DataFrame(trades_data)
+                        
+                        # Schema Detection
+                        has_entry_exit = {"entry_date", "entry_price", "exit_date", "exit_price"}.issubset(df_trades.columns)
+                        has_simple_side = {"date", "side", "price"}.issubset(df_trades.columns)
+                        
+                        if has_entry_exit:
+                            df_trades["entry_date"] = pd.to_datetime(df_trades["entry_date"])
+                            df_trades["exit_date"] = pd.to_datetime(df_trades["exit_date"])
+                            
+                            # Buy Signals (Entry)
+                            buy_signals = alt.Chart(df_trades).mark_point(shape='triangle-up', color='green', size=100, filled=True).encode(
+                                x='entry_date:T',
+                                y='entry_price:Q',
+                                tooltip=['entry_date', 'entry_price', 'type'] if 'type' in df_trades.columns else ['entry_date', 'entry_price']
+                            )
+                            layers.append(buy_signals)
+                            
+                            # Sell Signals (Exit)
+                            sell_signals = alt.Chart(df_trades).mark_point(shape='triangle-down', color='red', size=100, filled=True).encode(
+                                x='exit_date:T',
+                                y='exit_price:Q',
+                                tooltip=['exit_date', 'exit_price', 'pnl', 'pnl_pct'] if 'pnl' in df_trades.columns else ['exit_date', 'exit_price']
+                            )
+                            layers.append(sell_signals)
+                            
+                        elif has_simple_side:
+                            df_trades["date"] = pd.to_datetime(df_trades["date"])
+                            
+                            # Buy Signals
+                            buy_df = df_trades[df_trades["side"] == "BUY"]
+                            if not buy_df.empty:
+                                buy_signals = alt.Chart(buy_df).mark_point(shape='triangle-up', color='green', size=100, filled=True).encode(
+                                    x='date:T',
+                                    y='price:Q',
+                                    tooltip=['date', 'price', 'quantity']
+                                )
+                                layers.append(buy_signals)
+                            
+                            # Sell Signals
+                            sell_df = df_trades[df_trades["side"] == "SELL"]
+                            if not sell_df.empty:
+                                sell_signals = alt.Chart(sell_df).mark_point(shape='triangle-down', color='red', size=100, filled=True).encode(
+                                    x='date:T',
+                                    y='price:Q',
+                                    tooltip=['date', 'price', 'pnl']
+                                )
+                                layers.append(sell_signals)
+                    
+                    price_chart = alt.layer(*layers).properties(height=400, title="Price & Signals")
+
+                # --- Combine and Render ---
+                if equity_chart and price_chart:
+                    # FIX: Use vconcat with resolve_scale(x='shared') AND .interactive() on the combined chart
+                    combined = (
+                        alt.vconcat(equity_chart, price_chart)
+                        .resolve_scale(x='shared')
+                        .interactive()
+                    )
+                    st.altair_chart(combined, use_container_width=True)
+                elif price_chart:
+                    st.altair_chart(price_chart.interactive(), use_container_width=True)
+                elif equity_chart:
+                    st.altair_chart(equity_chart.interactive(), use_container_width=True)
+
+                # Trade History
+                st.subheader("Trade History")
+                if trades_data:
+                    df_trades = pd.DataFrame(trades_data)
+                    st.dataframe(df_trades, use_container_width=True)
+                else:
+                    st.info("No trades executed.")
+                
+            except requests.exceptions.RequestException as e:
+                st.error(f"❌ Analysis failed: {e}")
+                if hasattr(e, 'response') and e.response is not None:
+                    st.error(f"Details: {e.response.text}")
+
+
+def render_parameter_optimization_section():
+    """Parameter Optimization section - Run grid search optimization"""
+    import numpy as np
+    
+    st.header("🔬 Parameter Optimization")
+    st.caption("Run grid search to find optimal parameter combinations.")
+    
+    # Get configuration from session state
+    strategy_type = st.session_state.get("persisted_strategy_type", "ma_cross")
+    symbol = st.session_state.get("sl_symbol", "AAPL")
+    timeframe = st.session_state.get("sl_timeframe", "1d")
+    start_date = st.session_state.get("sl_start", datetime(2025, 1, 1))
+    end_date = st.session_state.get("sl_end", datetime(2025, 12, 31))
+    initial_capital = st.session_state.get("sl_capital", 1_000_000)
+    commission = st.session_state.get("sl_comm", 0.001)
+    
+    strategy_cfg = STRATEGY_TEMPLATES.get(strategy_type, {"label": strategy_type, "usable": False})
+    
+    if not strategy_cfg.get("supports_optimization", False):
+        st.info(
+            f"Optimization is not yet available for **{strategy_cfg['label']}**.\n"
+            "Please select a different strategy in Configuration."
+        )
+        return
+
+    # Optimization Configuration Map
+    OPTIMIZATION_CONFIG = {
+        "ma_cross": {
+            "x_param": "short_window", "y_param": "long_window",
+            "x_label": "Short Window", "y_label": "Long Window",
+            "x_range": [5, 50, 5], "y_range": [20, 200, 10],
+            "fixed": {}
+        },
+        "rsi_mean_reversion": {
+            "x_param": "oversold", "y_param": "overbought",
+            "x_label": "Oversold Level", "y_label": "Overbought Level",
+            "x_range": [20, 45, 5], "y_range": [55, 80, 5],
+            "fixed": {"rsi_period": 14}
+        },
+        "ema9_dip_buy": {
+            "x_param": "deviation_threshold", "y_param": "risk_reward",
+            "x_label": "Deviation Threshold %", "y_label": "Risk/Reward Ratio",
+            "x_range": [1.0, 3.0, 0.5], "y_range": [1.5, 3.0, 0.5],
+            "fixed": {"ema_fast": 9, "ema_slow": 21, "stop_buffer": 0.5, "lookback_volume": 20}
+        }
+    }
+    
+    if strategy_type not in OPTIMIZATION_CONFIG:
+        st.warning(f"Optimization configuration missing for {strategy_type}")
+        return
+
+    opt_config = OPTIMIZATION_CONFIG[strategy_type]
+    x_param = opt_config["x_param"]
+    y_param = opt_config["y_param"]
+    
+    # Optimizer Settings UI
+    with st.expander("Optimizer Settings", expanded=True):
+        col_opt1, col_opt2 = st.columns(2)
+        
+        with col_opt1:
+            st.markdown(f"**{opt_config['x_label']} (X-Axis)**")
+            x_min = st.number_input(f"Min {opt_config['x_label']}", value=opt_config["x_range"][0], key="opt_x_min")
+            x_max = st.number_input(f"Max {opt_config['x_label']}", value=opt_config["x_range"][1], key="opt_x_max")
+            x_step = st.number_input(f"Step {opt_config['x_label']}", value=opt_config["x_range"][2], key="opt_x_step")
+        
+        with col_opt2:
+            st.markdown(f"**{opt_config['y_label']} (Y-Axis)**")
+            y_min = st.number_input(f"Min {opt_config['y_label']}", value=opt_config["y_range"][0], key="opt_y_min")
+            y_max = st.number_input(f"Max {opt_config['y_label']}", value=opt_config["y_range"][1], key="opt_y_max")
+            y_step = st.number_input(f"Step {opt_config['y_label']}", value=opt_config["y_range"][2], key="opt_y_step")
+            
+        # Calculate combinations
+        try:
+            x_values = np.arange(x_min, x_max + x_step, x_step)
+            y_values = np.arange(y_min, y_max + y_step, y_step)
+            total_combinations = len(x_values) * len(y_values)
+            st.caption(f"Total Combinations: {total_combinations}")
+            if total_combinations > 100:
+                st.warning("⚠️ High number of combinations. Optimization may be slow.")
+        except Exception:
+            pass
+
+    # Run Optimization
+    if st.button("🚀 Run Optimization"):
+        with st.spinner("Running grid search..."):
+            try:
+                # Generate parameter lists
+                if isinstance(x_step, float) or isinstance(opt_config["x_range"][2], float):
+                     x_values = np.arange(x_min, x_max + x_step/100, x_step)
+                else:
+                     x_values = np.arange(x_min, x_max + 1, x_step)
+                     
+                if isinstance(y_step, float) or isinstance(opt_config["y_range"][2], float):
+                     y_values = np.arange(y_min, y_max + y_step/100, y_step)
+                else:
+                     y_values = np.arange(y_min, y_max + 1, y_step)
+
+                # Convert to python types
+                x_list = [float(x) if isinstance(x, (float, np.floating)) else int(x) for x in x_values]
+                y_list = [float(y) if isinstance(y, (float, np.floating)) else int(y) for y in y_values]
+
+                # Build payload
+                payload = {
+                    "strategy_type": strategy_type,
+                    "symbol": symbol,
+                    "timeframe": timeframe,
+                    "start_date": start_date.strftime("%Y-%m-%d"),
+                    "end_date": end_date.strftime("%Y-%m-%d"),
+                    "initial_capital": initial_capital,
+                    "commission": commission,
+                    "param_grid": {
+                        x_param: x_list,
+                        y_param: y_list
+                    },
+                    "fixed_params": opt_config["fixed"]
+                }
+                
+                # Call backend
+                response = requests.post("http://localhost:8000/optimize/generic", json=payload)
+                response.raise_for_status()
+                results = response.json()
+                
+                # Store results in session state
+                st.session_state["opt_results"] = results
+                st.session_state["opt_strategy_type"] = strategy_type # Track which strategy results belong to
+                
+                # Try to compute how many combinations were analyzed
+                if isinstance(results, dict):
+                    analyzed = results.get("total_combinations")
+                    if analyzed is None:
+                        if "results" in results and isinstance(results["results"], list):
+                            analyzed = len(results["results"])
+                        else:
+                            # Fallback: search for first list value
+                            analyzed = len(next((v for v in results.values() if isinstance(v, list)), []))
+                else:
+                    analyzed = len(results)
+                    
+                st.success(f"Optimization complete! Analyzed {analyzed} combinations.")
+                
+            except requests.exceptions.RequestException as e:
+                st.error(f"Optimization failed: {e}")
+                if hasattr(e, 'response') and e.response is not None:
+                    st.error(f"Details: {e.response.text}")
+
+    # Display Results
+    results = st.session_state.get("opt_results")
+    result_strategy = st.session_state.get("opt_strategy_type")
+    
+    # Only show results if they match the current strategy
+    if results and result_strategy == strategy_type:
+        st.markdown("---")
+        st.subheader("Optimization Results")
+        
+        # --- Normalize results into a list of dicts ---
+        if isinstance(results, dict):
+            # Common pattern: {"results": [...], "total_combinations": ...}
+            if "results" in results and isinstance(results["results"], list):
+                results_list = results["results"]
+            elif "items" in results and isinstance(results["items"], list):
+                results_list = results["items"]
+            else:
+                # Fallback: search the first list value in the dict
+                results_list = None
+                for v in results.values():
+                    if isinstance(v, list):
+                        results_list = v
+                        break
+                if results_list is None:
+                    st.error("Optimization results format not recognized.")
+                    return
+        else:
+            # Already a list
+            results_list = results
+            
+        # Flatten results for DataFrame
+        flat_results = []
+        if results_list:
+            for r in results_list:
+                if not isinstance(r, dict):
+                    continue
+                params = r.get("params", {}) or {}
+                metrics = r.get("metrics", {}) or {}
+                row = {}
+                row.update(params)
+                row.update(metrics)
+                flat_results.append(row)
+            
+        if not flat_results:
+            st.error("No optimization results to display.")
+            return
+
+        df_results = pd.DataFrame(flat_results)
+        
+        # Ensure score is numeric
+        if "score" in df_results.columns:
+            df_results["score"] = pd.to_numeric(df_results["score"], errors="coerce")
+        
+        # Best Parameters
+        if not df_results.empty and "score" in df_results.columns:
+            best_row_series = df_results.sort_values("score", ascending=False).iloc[0]
+            best_row = best_row_series.to_dict()
+        else:
+            st.error("No valid results to display.")
+            return
+        
+        col_res1, col_res2, col_res3 = st.columns(3)
+        col_res1.metric("Best Score", f"{best_row.get('score', 0):.2f}")
+        col_res2.metric("Return %", f"{best_row.get('return_pct', 0):.2f}%")
+        col_res3.metric("Sharpe Ratio", f"{best_row.get('sharpe_ratio', 0):.2f}")
+        
+        st.success(f"**Best Parameters:** {opt_config['x_label']}={best_row.get(x_param)}, {opt_config['y_label']}={best_row.get(y_param)}")
+        
+        # Save best params to session state for the Apply button
+        st.session_state["opt_best_params"] = best_row
+        
+        # Apply to Single Analysis Button
+        st.caption("Apply the best parameters to the Single Analysis form.")
+        
+        def apply_best_to_single():
+            best_params = st.session_state.get("opt_best_params", {})
+            apply_strategy_params_to_session(strategy_type, best_params)
+            
+        st.button("Apply to Single Analysis", on_click=apply_best_to_single, key="opt_apply_to_single")
+        st.info("✅ Applied! Open the **Single Analysis** section to run a backtest with these parameters.")
+        
+        # Heatmap
+        st.subheader("🔥 Score Heatmap")
+        try:
+            # FIX: Ensure data types are strictly numeric for Altair
+            df_heatmap = df_results.copy()
+            df_heatmap[x_param] = pd.to_numeric(df_heatmap[x_param], errors='coerce')
+            df_heatmap[y_param] = pd.to_numeric(df_heatmap[y_param], errors='coerce')
+            df_heatmap["score"] = pd.to_numeric(df_heatmap["score"], errors='coerce')
+            
+            # Drop invalid rows
+            df_heatmap = df_heatmap.dropna(subset=[x_param, y_param, "score"])
+            
+            chart = alt.Chart(df_heatmap).mark_rect().encode(
+                x=alt.X(f'{x_param}:O', title=opt_config['x_label']),
+                y=alt.Y(f'{y_param}:O', title=opt_config['y_label']),
+                color=alt.Color('score:Q', title='Score', scale=alt.Scale(scheme='viridis')),
+                tooltip=[x_param, y_param, 'return_pct', 'sharpe_ratio', 'max_drawdown', 'score']
+            ).properties(
+                title="Optimization Score Heatmap"
+            )
+            st.altair_chart(chart, use_container_width=True)
+        except Exception as e:
+            st.error(f"Heatmap error: {e}")
+            
+        # Top Results Table
+        st.subheader("Top 10 Configurations")
+        top_10 = df_results.sort_values("score", ascending=False).head(10)
+        st.dataframe(
+            top_10[[x_param, y_param, "score", "return_pct", "sharpe_ratio", "max_drawdown", "trade_count"]],
+            use_container_width=True
+        )
+        
+        # Save Strategy
+        st.markdown("---")
+        with st.expander("💾 Save Best Parameters as Strategy"):
+            with st.form("save_best_strategy_form"):
+                default_name = f"{symbol}_{timeframe}_{strategy_type}_Best"
+                strategy_name = st.text_input("Strategy Name", value=default_name)
+                strategy_desc = st.text_area("Description", value=f"Grid Search Result. Return: {best_row['return_pct']:.2f}%")
+            
+                if st.form_submit_button("💾 Save Strategy"):
+                    if not strategy_name:
+                        st.error("Strategy Name is required.")
+                    else:
+                        lib = StrategyLibrary()
+                        new_strategy = {
+                            "id": str(uuid.uuid4()),
+                            "name": strategy_name,
+                            "description": strategy_desc,
+                            "created_at": datetime.now().isoformat(),
+                            "symbol": symbol,
+                            "timeframe": timeframe,
+                            "strategy_type": strategy_type,
+                            "params": {
+                                x_param: float(best_row[x_param]), # Ensure native float/int
+                                y_param: float(best_row[y_param]),
+                                **opt_config["fixed"]
+                            },
+                            "metrics": best_row
+                        }
+                        lib.save_strategy(new_strategy)
+                        st.success(f"Strategy '{strategy_name}' saved successfully!")
+        
+# ============================================================================
+# Helper Functions
+# ============================================================================
+
+def apply_strategy_params_to_session(strategy_type: str, params: Dict[str, Any]):
+    """
+    Helper to apply strategy parameters to Single Analysis session state.
+    """
+    # Set the strategy type for Single Analysis
+    st.session_state["sl_strategy_type"] = strategy_type
+    
+    if strategy_type == "ma_cross":
+        st.session_state["sl_ma_short"] = int(params.get("short_window", 0))
+        st.session_state["sl_ma_long"] = int(params.get("long_window", 0))
+        
+    elif strategy_type == "rsi_mean_reversion":
+        if "rsi_period" in params:
+            st.session_state["sl_rsi_period"] = int(params["rsi_period"])
+        st.session_state["sl_rsi_oversold"] = int(params.get("oversold_level", 20))
+        st.session_state["sl_rsi_overbought"] = int(params.get("overbought_level", 80))
+        
+    elif strategy_type == "ema9_dip_buy":
+        st.session_state["sl_ema9_dev"] = float(params.get("deviation_threshold", 0.0))
+        st.session_state["sl_ema9_rr"] = float(params.get("risk_reward", 0.0))
+        
+        # Handle fixed parameters
+        opt_cfg = OPTIMIZATION_CONFIG.get("ema9_dip_buy", {})
+        fixed = opt_cfg.get("fixed", {})
+        
+        def get_or_fixed(name, default=None):
+            if name in params:
+                return params[name]
+            if name in fixed:
+                return fixed[name]
+            return default
+        
+        st.session_state["sl_ema9_stop"] = float(get_or_fixed("stop_buffer", 0.5))
+        st.session_state["sl_ema9_vol"] = int(get_or_fixed("lookback_volume", 20))
+        st.session_state["sl_ema9_fast"] = int(get_or_fixed("ema_fast", 9))
+        st.session_state["sl_ema9_slow"] = int(get_or_fixed("ema_slow", 21))
+
+
+# ... (existing code) ...
+
+
+
+
+def render_saved_strategies_section():
+    """Saved Strategies section - View and manage saved strategies"""
+    # Saved Strategies Section
+    # ==========================================
+    st.markdown("---")
+    st.subheader("📚 Saved Strategies")
+    
+    lib = StrategyLibrary()
+    strategies = lib.load_strategies()
+    
+    # Ensure all strategies have favorite field for backward compatibility
+    for s in strategies:
+        if "favorite" not in s:
+            s["favorite"] = False
+    
+    if not strategies:
+        st.info("No strategies saved yet.")
+    else:
+        # Filters
+        st.markdown("#### Filters & Sorting")
+        col_f1, col_f2, col_f3, col_f4 = st.columns(4)
+        
+        with col_f1:
+            # Symbol filter
+            unique_symbols = sorted(set(s["symbol"] for s in strategies))
+            symbol_filter = st.selectbox("Symbol", ["All"] + unique_symbols, key="strat_filter_symbol")
+        
+        with col_f2:
+            # Timeframe filter
+            unique_timeframes = sorted(set(s["timeframe"] for s in strategies))
+            timeframe_filter = st.selectbox("Timeframe", ["All"] + unique_timeframes, key="strat_filter_timeframe")
+        
+        with col_f3:
+            # Favorite filter
+            favorite_only = st.checkbox("⭐ Favorites only", key="strat_filter_favorite")
+        
+        with col_f4:
+            # Sorting
+            sort_options = ["Return (%)", "Max Drawdown", "Created (newest)", "Created (oldest)", "Name"]
+            sort_by = st.selectbox("Sort by", sort_options, key="strat_sort")
+        
+        # Apply filters
+        filtered_strategies = strategies
+        if symbol_filter != "All":
+            filtered_strategies = [s for s in filtered_strategies if s["symbol"] == symbol_filter]
+        if timeframe_filter != "All":
+            filtered_strategies = [s for s in filtered_strategies if s["timeframe"] == timeframe_filter]
+        if favorite_only:
+            filtered_strategies = [s for s in filtered_strategies if s.get("favorite", False)]
+        
+        # Apply sorting
+        if sort_by == "Return (%)":
+            filtered_strategies = sorted(filtered_strategies, key=lambda s: s.get("metrics", {}).get("return_pct", 0), reverse=True)
+        elif sort_by == "Max Drawdown":
+            filtered_strategies = sorted(filtered_strategies, key=lambda s: s.get("metrics", {}).get("max_drawdown", 0))
+        elif sort_by == "Created (newest)":
+            filtered_strategies = sorted(filtered_strategies, key=lambda s: s.get("created_at", ""), reverse=True)
+        elif sort_by == "Created (oldest)":
+            filtered_strategies = sorted(filtered_strategies, key=lambda s: s.get("created_at", ""))
+        elif sort_by == "Name":
+            filtered_strategies = sorted(filtered_strategies, key=lambda s: s.get("name", ""))
+        
+        if not filtered_strategies:
+            st.info("No strategies match the current filters.")
+        else:
+            # Display table
+            st.markdown(f"**Found {len(filtered_strategies)} strategies**")
+            
+            # Create display dataframe
+            strat_rows = []
+            for s in filtered_strategies:
+                row = {
+                    "ID": s["id"],
+                    "⭐": "⭐" if s.get("favorite", False) else "☆",
+                    "Name": s["name"],
+                    "Symbol": s["symbol"],
+                    "Timeframe": s["timeframe"],
+                    "Type": s["strategy_type"],
+                    "Return (%)": f"{s.get('metrics', {}).get('return_pct', 0):.2f}%",
+                    "Created": s["created_at"][:16].replace("T", " ")
+                }
+                strat_rows.append(row)
+            
+            st.dataframe(pd.DataFrame(strat_rows), use_container_width=True, hide_index=True)
+            
+            # Management Section
+            st.markdown("---")
+            st.subheader("🛠️ Manage Strategy")
+            
+            selected_strat_name = st.selectbox(
+                "Select Strategy to Manage",
+                options=[s["name"] for s in filtered_strategies],
+                key="strat_select_manage"
+            )
+            
+            # Find selected strategy object
+            selected_strat = next((s for s in filtered_strategies if s["name"] == selected_strat_name), None)
+            
+            if selected_strat:
+                col_m1, col_m2 = st.columns([2, 1])
+                
+                with col_m1:
+                    st.markdown(f"**Description:** {selected_strat.get('description', 'No description')}")
+                    st.json(selected_strat.get("params", {}), expanded=False)
+                    
+                    # Load Button
+                    def load_selected_strategy():
+                        apply_strategy_params_to_session(selected_strat["strategy_type"], selected_strat["params"])
+                        # Set other session state vars if needed (symbol, timeframe)
+                        st.session_state["sl_symbol"] = selected_strat["symbol"]
+                        st.session_state["sl_timeframe"] = selected_strat["timeframe"]
+                        
+                    st.button("📂 Load to Single Analysis", on_click=load_selected_strategy, key=f"btn_load_{selected_strat['id']}")
+                    st.caption("Loads parameters and switches context to Single Analysis.")
+
+                with col_m2:
+                    # Favorite Toggle
+                    is_fav = selected_strat.get("favorite", False)
+                    if st.button("Unfavorite" if is_fav else "Favorite", key=f"btn_fav_{selected_strat['id']}"):
+                        lib.update_strategy(selected_strat["id"], {"favorite": not is_fav})
+                        st.rerun()
+                        
+                    # Delete Button
+                    if st.button("🗑️ Delete Strategy", key=f"btn_del_{selected_strat['id']}", type="primary"):
+                        lib.delete_strategy(selected_strat["id"])
+                        st.success(f"Strategy '{selected_strat['name']}' deleted.")
+                        st.rerun()
+            
+            # Actions
+            st.markdown("#### Actions")
+            col_action1, col_action2 = st.columns(2)
+            
+            with col_action1:
+                selected_strat_name = st.selectbox(
+                    "Select Strategy", 
+                    options=[s["name"] for s in filtered_strategies],
+                    key="strat_action_selector"
+                )
+            
+            with col_action2:
+                action_cols = st.columns(4)
+                
+                selected_strat = next((s for s in filtered_strategies if s["name"] == selected_strat_name), None)
+                
+                if selected_strat:
+                    with action_cols[0]:
+                        if st.button("⭐ Toggle Favorite", key="strat_action_favorite"):
+                            lib.toggle_favorite(selected_strat["id"])
+                            st.success(f"Toggled favorite for '{selected_strat_name}'")
+                            st.rerun()
+                    
+                    with action_cols[1]:
+                        if st.button("📂 Load", key="strat_action_load"):
+                            st.session_state["strategy_lab_loaded_strategy"] = selected_strat
+                            st.success(f"Loaded '{selected_strat_name}'. Parameters will be applied on next render.")
+                            st.rerun()
+                    
+                    with action_cols[2]:
+                        if st.button("✏️ Rename", key="strat_action_rename"):
+                            st.session_state["rename_strategy_id"] = selected_strat["id"]
+                            st.session_state["rename_strategy_name"] = selected_strat["name"]
+                    
+                    with action_cols[3]:
+                        if st.button("🗑️ Delete", key="strat_action_delete"):
+                            st.session_state["delete_strategy_id"] = selected_strat["id"]
+                            st.session_state["delete_strategy_name"] = selected_strat["name"]
+            
+            # Rename dialog
+            if "rename_strategy_id" in st.session_state:
+                st.markdown("---")
+                st.markdown("### ✏️ Rename Strategy")
+                new_name = st.text_input(
+                    "New Name", 
+                    value=st.session_state.get("rename_strategy_name", ""),
+                    key="rename_input"
+                )
+                col_r1, col_r2 = st.columns(2)
+                with col_r1:
+                    if st.button("💾 Save", key="rename_save"):
+                        if new_name.strip():
+                            lib.update_strategy(st.session_state["rename_strategy_id"], {"name": new_name.strip()})
+                            st.success(f"Renamed to '{new_name}'")
+                            del st.session_state["rename_strategy_id"]
+                            del st.session_state["rename_strategy_name"]
+                            st.rerun()
+                        else:
+                            st.warning("Name cannot be empty")
+                with col_r2:
+                    if st.button("❌ Cancel", key="rename_cancel"):
+                        del st.session_state["rename_strategy_id"]
+                        del st.session_state["rename_strategy_name"]
+                        st.rerun()
+            
+            # Delete confirmation
+            if "delete_strategy_id" in st.session_state:
+                st.markdown("---")
+                st.warning(f"⚠️ Are you sure you want to delete '{st.session_state.get('delete_strategy_name')}'?")
+                col_d1, col_d2 = st.columns(2)
+                with col_d1:
+                    if st.button("🗑️ Confirm Delete", key="delete_confirm"):
+                        lib.delete_strategy(st.session_state["delete_strategy_id"])
+                        st.success(f"Deleted '{st.session_state['delete_strategy_name']}'")
+                        del st.session_state["delete_strategy_id"]
+                        del st.session_state["delete_strategy_name"]
+                        st.rerun()
+                with col_d2:
+                    if st.button("❌ Cancel", key="delete_cancel"):
+                        del st.session_state["delete_strategy_id"]
+                        del st.session_state["delete_strategy_name"]
+                        st.rerun()
+
+
+def render_symbol_preset_section():
+    """Symbol Preset Settings section - Developer settings"""
+    st.header("🔧 Symbol Preset Settings")
+    st.caption("Developer-only settings for managing symbol presets.")
+    
+    # TODO: Implement in Phase 5
+    st.warning("🚧 This section is under construction. Will be implemented in Phase 5.")
+# ============================================================================
+# Old Strategy Lab Code (to be extracted in phases)
+# ============================================================================
+
+def _old_strategy_lab_code():
+    """
+    This function contains the old Strategy Lab code that will be 
+    progressively moved to section functions in Phases 2-5.
+    DO NOT CALL THIS FUNCTION - it's just a holder for code to be moved.
+    """
+    # Strategy Parameters section starts here
     st.subheader("Strategy Parameters")
 
     if not strategy_cfg.get("usable", False):
@@ -1052,17 +2009,33 @@ def render_strategy_lab():
         submitted_opt = False
 
         if strategy_type == "ma_cross":
+            # --- Manage Optimizer State Persistence ---
+            current_config = (symbol, timeframe, start_date, end_date)
+            last_config = st.session_state.get("ma_cross_last_config")
+            
+            if last_config != current_config:
+                # Config changed, clear optimizer results
+                st.session_state["ma_cross_opt_results"] = None
+                st.session_state["ma_cross_best_params"] = None
+                st.session_state["ma_cross_last_config"] = current_config
+            
             st.markdown("**Moving Average Crossover**")
             st.caption("Buy when Short MA crosses above Long MA. Sell when Short MA crosses below Long MA.")
             
             tab_single, tab_opt = st.tabs(["Single Run", "Parameter Optimization"])
             
             with tab_single:
+                # Initialize session state for Single Run inputs if not present
+                if "single_run_short_window" not in st.session_state:
+                    st.session_state["single_run_short_window"] = short_window_default
+                if "single_run_long_window" not in st.session_state:
+                    st.session_state["single_run_long_window"] = long_window_default
+
                 col1, col2 = st.columns(2)
                 with col1:
-                    short_window = st.number_input("Short Window", min_value=1, max_value=200, value=short_window_default, key="sl_short_single")
+                    short_window = st.number_input("Short Window", min_value=1, max_value=200, key="single_run_short_window")
                 with col2:
-                    long_window = st.number_input("Long Window", min_value=1, max_value=400, value=long_window_default, key="sl_long_single")
+                    long_window = st.number_input("Long Window", min_value=1, max_value=400, key="single_run_long_window")
                 
                 strategy_params = {
                     "short_window": short_window,
@@ -1070,10 +2043,16 @@ def render_strategy_lab():
                 }
                 
                 st.markdown("---")
-                submitted_single = st.form_submit_button("🚀 Run Strategy Analysis")
+                # Trigger analysis if button clicked OR auto-trigger flag is set
+                submitted_single = st.form_submit_button("🚀 Run Strategy Analysis") or st.session_state.get("trigger_single_run", False)
+                
+                # Reset trigger after use (will be handled in the execution block)
             
             with tab_opt:
-                st.markdown("#### Grid Search Optimizer")
+                st.markdown("#### Grid Search Optimizer（設定）")
+                st.caption("このブロックでは「どのパラメータ範囲で」「どのスコアロジックで」最適化するかを設定します。実行結果はページ下部の「Parameter Optimization Results」に表示されます。")
+                st.caption("ℹ️ **Score Logic**: `Score = Sharpe * 2.0 + Return * 0.5`. Penalties applied for < 5 trades or > 70% Max DD (Score = -1e9).")
+                
                 c1, c2 = st.columns(2)
                 with c1:
                     st.markdown("Short Window Range")
@@ -1104,6 +2083,14 @@ def render_strategy_lab():
                     st.caption("⚠️ Over limit! Please reduce parameter ranges.")
                 elif total_combinations == 0:
                     st.caption("⚠️ Invalid range settings.")
+
+                # Result Filters
+                st.markdown("##### Result Filters")
+                f1, f2 = st.columns(2)
+                with f1:
+                    min_trades_filter = st.slider("Min Trades (filter)", 1, 30, 3, key="opt_min_trades")
+                with f2:
+                    max_dd_filter = st.slider("Max Drawdown % (filter)", 10, 80, 60, key="opt_max_dd")
                 
                 # Disable button if invalid
                 opt_disabled = total_combinations == 0 or total_combinations > 400
@@ -1133,6 +2120,36 @@ def render_strategy_lab():
             st.markdown("---")
             submitted_single = st.form_submit_button("🚀 Run Strategy Analysis")
             submitted_opt = False # Optimization handled by generic section if supported
+
+
+
+        elif strategy_type == "ema9_dip_buy":
+            st.markdown("**EMA9 Dip Buy**")
+            st.caption("Long-only pullback strategy. Buys dips near 9EMA in strong uptrends with volume confirmation.")
+            
+            # Single Run only (Parameter Optimization is in the common section below)
+            col1, col2 = st.columns(2)
+            with col1:
+                ema_fast = st.number_input("Fast EMA Period", min_value=5, max_value=20, value=9, key="sl_ema9_fast")
+                deviation_threshold = st.number_input("Deviation Threshold %", min_value=0.5, max_value=5.0, value=2.0, step=0.5, key="sl_ema9_dev")
+                stop_buffer = st.number_input("Stop Loss Buffer %", min_value=0.1, max_value=2.0, value=0.5, step=0.1, key="sl_ema9_stop")
+            with col2:
+                ema_slow = st.number_input("Slow EMA Period", min_value=10, max_value=50, value=21, key="sl_ema9_slow")
+                risk_reward = st.number_input("Risk/Reward Ratio", min_value=1.0, max_value=5.0, value=2.0, step=0.5, key="sl_ema9_rr")
+                lookback_volume = st.number_input("Volume Lookback", min_value=10, max_value=50, value=20, step=5, key="sl_ema9_vol")
+            
+            strategy_params = {
+                "ema_fast": ema_fast,
+                "ema_slow": ema_slow,
+                "deviation_threshold": deviation_threshold,
+                "stop_buffer": stop_buffer,
+                "risk_reward": risk_reward,
+                "lookback_volume": lookback_volume
+            }
+            
+            st.markdown("---")
+            submitted_single = st.form_submit_button("🚀 Run Strategy Analysis")
+            # ✅ submitted_opt is defined in the Parameter Optimization tab, don't overwrite it
 
 
 
@@ -1417,9 +2434,16 @@ def render_strategy_lab():
                 st.error(f"Backtest failed: {e}")
                 if e.response is not None:
                     st.error(f"Details: {e.response.text}")
+            
+            # Reset auto-trigger flag
+            if st.session_state.get("trigger_single_run", False):
+                st.session_state["trigger_single_run"] = False
+                st.rerun()
 
     # MA Cross Specific Optimization (Legacy/Specific Endpoint)
-    if strategy_type == "ma_cross" and submitted_opt:
+    if strategy_type == "ma_cross":
+        # 1. Execution Logic
+        if submitted_opt:
             # API Call for MA Cross Optimization
             payload = {
                 "symbol": symbol,
@@ -1427,7 +2451,7 @@ def render_strategy_lab():
                 "start_date": start_date.isoformat(),
                 "end_date": end_date.isoformat(),
                 "initial_capital": initial_capital,
-                "commission_rate": commission,
+                "commission_rate": commission, # Added back commission_rate
                 "short_min": short_min,
                 "short_max": short_max,
                 "short_step": short_step,
@@ -1444,281 +2468,147 @@ def render_strategy_lab():
                     
                     st.success(f"Optimization Completed! Tested {data['total_combinations']} combinations.")
                     
-                    top_results = data["top_results"]
-                    if not top_results:
-                        st.warning("No valid results found.")
-                    else:
-                        # Display Best Params
-                        best = top_results[0]
-                        best_params = best["params"]
-                        best_metrics = best["metrics"]
-                        
-                        st.markdown("### 🏆 Best Parameters")
-                        col1, col2, col3, col4 = st.columns(4)
-                        col1.metric("Short Window", best_params.get("short_window"))
-                        col2.metric("Long Window", best_params.get("long_window"))
-                        col3.metric("Total Return", f"{best_metrics['return_pct']:.2f}%")
-                        col4.metric("Sharpe Ratio", f"{best_metrics['sharpe_ratio']:.2f}")
-                        
-                        # Heatmap
-                        st.subheader("🔥 Performance Heatmap")
-                        rows = []
-                        for r in top_results:
-                            row = r["params"].copy()
-                            row.update(r["metrics"])
-                            rows.append(row)
-                        df_results = pd.DataFrame(rows)
-                        
-                        try:
-                            # import altair as alt (Moved to global scope)
-                            chart = alt.Chart(df_results).mark_rect().encode(
-                                x=alt.X('short_window:O', title='Short Window'),
-                                y=alt.Y('long_window:O', title='Long Window'),
-                                color=alt.Color('return_pct:Q', title='Return %', scale=alt.Scale(scheme='viridis')),
-                                tooltip=['short_window', 'long_window', 'return_pct', 'max_drawdown', 'trade_count']
-                            ).properties(title="Return % by Parameter Combination")
-                            st.altair_chart(chart, use_container_width=True)
-                        except Exception as e:
-                            st.warning(f"Could not render heatmap: {e}")
-                            
-                        # Top Results Table
-                        st.subheader("📊 Top Results")
-                        display_df = df_results.copy()
-                        display_df = display_df.rename(columns={
-                            "short_window": "Short",
-                            "long_window": "Long",
-                            "return_pct": "Return (%)",
-                            "max_drawdown": "Max DD (%)",
-                            "sharpe_ratio": "Sharpe",
-                            "win_rate": "Win Rate",
-                            "trade_count": "Trades"
-                        })
-                        st.dataframe(display_df, use_container_width=True)
-                        
-                        # Save Strategy Logic
-                        st.markdown("---")
-                        st.subheader("💾 Save to Strategy Library")
-                        with st.expander("Save Best Parameters as New Strategy", expanded=False):
-                            with st.form("save_best_strategy_form_ma"):
-                                default_name = f"{symbol}_{timeframe}_MACross_Best"
-                                strategy_name = st.text_input("Strategy Name", value=default_name)
-                                strategy_desc = st.text_area("Description", value=f"Grid Search Result. Return: {best_metrics['return_pct']:.2f}%")
-                                
-                                if st.form_submit_button("💾 Save Strategy"):
-                                    if not strategy_name:
-                                        st.error("Strategy Name is required.")
-                                    else:
-                                        lib = StrategyLibrary()
-                                        new_strategy = {
-                                            "id": str(uuid.uuid4()),
-                                            "name": strategy_name,
-                                            "description": strategy_desc,
-                                            "created_at": datetime.now().isoformat(),
-                                            "symbol": symbol,
-                                            "timeframe": timeframe,
-                                            "strategy_type": "ma_cross",
-                                            "params": best_params,
-                                            "metrics": best_metrics
-                                        }
-                                        lib.save_strategy(new_strategy)
-                                        st.success(f"Strategy '{strategy_name}' saved successfully!")
-
+                    # Store results in session state
+                    st.session_state["ma_cross_opt_results"] = data
+                    
                 except requests.exceptions.RequestException as e:
                     st.error(f"Optimization failed: {e}")
-                    if e.response is not None:
-                        st.error(f"Details: {e.response.text}")
-
-    # ==========================================
-    # Generic Optimization Section
-    # ==========================================
-    import numpy as np # Ensure numpy is imported for arange
-    
-    st.subheader("Parameter Optimization (Grid Search)")
-
-    if not strategy_cfg.get("supports_optimization", False):
-        st.info(
-            "この戦略はまだパラメータ最適化に対応していません。\n"
-            "Single Run だけ利用できます。（[x] マークの戦略は順次対応予定）"
-        )
-    else:
-        # Optimization Configuration Map
-        OPTIMIZATION_CONFIG = {
-            "ma_cross": {
-                "x_param": "short_window", "y_param": "long_window",
-                "x_label": "Short Window", "y_label": "Long Window",
-                "x_range": [5, 50, 5], "y_range": [20, 200, 10],
-                "fixed": {}
-            },
-            "ema_cross": {
-                "x_param": "short_window", "y_param": "long_window",
-                "x_label": "Short Window (EMA)", "y_label": "Long Window (EMA)",
-                "x_range": [5, 50, 5], "y_range": [20, 200, 10],
-                "fixed": {}
-            },
-            "macd_trend": {
-                "x_param": "fast_period", "y_param": "slow_period",
-                "x_label": "Fast Period", "y_label": "Slow Period",
-                "x_range": [5, 30, 1], "y_range": [20, 60, 2],
-                "fixed": {"signal_period": 9}
-            },
-            "rsi_mean_reversion": {
-                "x_param": "oversold", "y_param": "overbought",
-                "x_label": "Oversold Level", "y_label": "Overbought Level",
-                "x_range": [20, 45, 5], "y_range": [55, 80, 5],
-                "fixed": {"rsi_period": 14}
-            },
-            "bollinger_breakout": {
-                "x_param": "window", "y_param": "num_std",
-                "x_label": "Window", "y_label": "Num Std Dev",
-                "x_range": [10, 50, 5], "y_range": [1.0, 3.0, 0.5],
-                "fixed": {}
-            }
-        }
         
-        if strategy_type not in OPTIMIZATION_CONFIG:
-            st.info(f"Optimization not yet available for {strategy_type}")
-            submitted_opt = False
-        else:
-            opt_config = OPTIMIZATION_CONFIG[strategy_type]
-            x_param = opt_config["x_param"]
-            y_param = opt_config["y_param"]
+        # 2. Display Logic (from Session State)
+        if st.session_state.get("ma_cross_opt_results"):
+            data = st.session_state["ma_cross_opt_results"]
+            top_results = data.get("top_results", [])
             
-            col_opt1, col_opt2 = st.columns(2)
-            
-            with col_opt1:
-                st.markdown(f"**{opt_config['x_label']} (X-Axis)**")
-                x_min = st.number_input(f"Min {opt_config['x_label']}", value=opt_config["x_range"][0], key="opt_x_min")
-                x_max = st.number_input(f"Max {opt_config['x_label']}", value=opt_config["x_range"][1], key="opt_x_max")
-                x_step = st.number_input(f"Step {opt_config['x_label']}", value=opt_config["x_range"][2], key="opt_x_step")
-                
-            with col_opt2:
-                st.markdown(f"**{opt_config['y_label']} (Y-Axis)**")
-                y_min = st.number_input(f"Min {opt_config['y_label']}", value=opt_config["y_range"][0], key="opt_y_min")
-                y_max = st.number_input(f"Max {opt_config['y_label']}", value=opt_config["y_range"][1], key="opt_y_max")
-                y_step = st.number_input(f"Step {opt_config['y_label']}", value=opt_config["y_range"][2], key="opt_y_step")
-            
-            # Calculate combinations
-            try:
-                if isinstance(x_step, float) or isinstance(opt_config["x_range"][2], float):
-                     x_values = np.arange(x_min, x_max + x_step/100, x_step) # small buffer for float
-                else:
-                     x_values = range(int(x_min), int(x_max) + 1, int(x_step))
-                     
-                if isinstance(y_step, float) or isinstance(opt_config["y_range"][2], float):
-                     y_values = np.arange(y_min, y_max + y_step/100, y_step)
-                else:
-                     y_values = range(int(y_min), int(y_max) + 1, int(y_step))
-                
-                num_combos = len(list(x_values)) * len(list(y_values))
-                st.caption(f"Total Combinations: {num_combos} (Limit: 1000)")
-                
-                if num_combos > 1000:
-                    st.error("Too many combinations! Please increase step size or reduce range.")
-                    submitted_opt = False
-                else:
-                    submitted_opt = st.button("🚀 Run Optimization", key="run_opt_btn")
-            except Exception:
-                st.error("Invalid range parameters")
-                submitted_opt = False
+            if not top_results:
+                st.warning("No valid results found.")
+            else:
+                # Create DataFrame from all results
+                rows = []
+                for r in top_results:
+                    row = r["params"].copy()
+                    row.update(r["metrics"])
+                    rows.append(row)
+                df_results = pd.DataFrame(rows)
 
-            if submitted_opt:
-                # Prepare generic payload
-                # Convert numpy types to python types for JSON serialization
-                x_list = [float(x) if isinstance(x, (float, np.floating)) else int(x) for x in x_values]
-                y_list = [float(y) if isinstance(y, (float, np.floating)) else int(y) for y in y_values]
+                # --- Apply Filters for Table & Best Params ---
+                # Filter by Min Trades
+                df_filtered = df_results[df_results["trade_count"] >= min_trades_filter]
+                # Filter by Max Drawdown (convert decimal to %)
+                df_filtered = df_filtered[df_filtered["max_drawdown"] * 100 <= max_dd_filter]
+                # Filter out penalized scores
+                df_filtered = df_filtered[df_filtered["score"] > -1e8]
                 
-                param_grid = {
-                    x_param: x_list,
-                    y_param: y_list
-                }
-                
-                payload = {
-                    "symbol": symbol,
-                    "timeframe": timeframe,
-                    "start_date": start_date.isoformat(),
-                    "end_date": end_date.isoformat(),
-                    "initial_capital": initial_capital,
-                    "commission_rate": commission,
-                    "strategy_type": strategy_type,
-                    "param_grid": param_grid,
-                    "fixed_params": opt_config["fixed"]
-                }
-                
-                with st.spinner("Running Optimization..."):
-                    try:
-                        response = requests.post(f"{BACKEND_URL}/optimize/generic", json=payload)
-                        response.raise_for_status()
-                        data = response.json()
-                        
-                        st.success(f"Optimization Completed! Tested {data['total_combinations']} combinations.")
-                        
-                        top_results = data["top_results"]
-                        if not top_results:
-                            st.warning("No valid results found.")
-                        else:
-                            best = top_results[0]
-                            best_params = best["params"]
-                            best_metrics = best["metrics"]
-                            
-                            # Store in session state
-                            st.session_state["opt_best_params"] = best_params
-                            st.session_state["opt_best_metrics"] = best_metrics
-                            st.session_state["opt_top_results"] = top_results
-                            st.session_state["opt_strategy_type"] = strategy_type
-                            
-                            # Prepare Data for Visualization
-                            rows = []
-                            for r in top_results:
-                                row = r["params"].copy()
-                                row.update(r["metrics"])
-                                rows.append(row)
-                            df_results = pd.DataFrame(rows)
-                            st.session_state["opt_results_df"] = df_results
-                            
-                    except requests.exceptions.RequestException as e:
-                        st.error(f"Optimization failed: {e}")
-                        if e.response is not None:
-                            st.error(f"Details: {e.response.text}")
+                # Sort by Score
+                if "score" in df_filtered.columns:
+                    df_filtered = df_filtered.sort_values(by=["score", "sharpe_ratio"], ascending=[False, False])
 
-        # ==========================================
-        # Display Results (Generic)
-        # ==========================================
-        if "opt_best_params" in st.session_state and "opt_best_metrics" in st.session_state:
-            # Check if results match current strategy type to avoid confusion
-            if st.session_state.get("opt_strategy_type") == strategy_type:
-                best_params = st.session_state["opt_best_params"]
-                best_metrics = st.session_state["opt_best_metrics"]
-                df_results = st.session_state.get("opt_results_df")
-                
-                opt_config = OPTIMIZATION_CONFIG[strategy_type]
-                x_param = opt_config["x_param"]
-                y_param = opt_config["y_param"]
-                
-                # Best Params Card
-                st.markdown("### 🏆 Best Parameters")
-                col1, col2, col3, col4 = st.columns(4)
-                
-                col1.metric(opt_config["x_label"], best_params.get(x_param))
-                col2.metric(opt_config["y_label"], best_params.get(y_param))
-                col3.metric("Total Return", f"{best_metrics['return_pct']:.2f}%")
-                col4.metric("Sharpe Ratio", f"{best_metrics['sharpe_ratio']:.2f}")
-                
-                # Heatmap
-                st.subheader("🔥 Performance Heatmap")
+                # --- Display Best Parameters (Filtered) ---
+                if not df_filtered.empty:
+                    best_row = df_filtered.iloc[0]
+                    
+                    st.markdown("### 🏆 Best Parameters (Filtered)")
+                    st.caption("Best based on composite score (Sharpe + Return with DD / trade penalties)")
+                    col1, col2, col3, col4 = st.columns(4)
+                    col1.metric("Short Window", int(best_row["short_window"]))
+                    col2.metric("Long Window", int(best_row["long_window"]))
+                    col3.metric("Total Return", f"{best_row['return_pct']:.2f}%")
+                    col4.metric("Score", f"{best_row['score']:.2f}")
+                    
+                    # Update strategy save default values
+                    best_metrics = best_row # For save form below
+                    
+                    # --- Apply to Single Run Button ---
+                    st.caption("上の Best Parameters を Single Run の短期・長期ウィンドウに反映し、Single Run バックテストを自動実行します。")
+                    
+                    def apply_best_params_callback():
+                        st.session_state["single_run_short_window"] = int(best_row["short_window"])
+                        st.session_state["single_run_long_window"] = int(best_row["long_window"])
+                        st.session_state["trigger_single_run"] = True
+                    
+                    st.button("Apply to Single Run", on_click=apply_best_params_callback, key="apply_best_btn")
+                    
+                    if st.session_state.get("trigger_single_run"):
+                        st.success("Parameters applied! Switch to 'Single Run' tab to see results.")
+                    best_metrics = best_row # For save form below
+                else:
+                    st.warning("⚠️ No strategies matched your filters. Please relax the Min Trades or Max Drawdown constraints.")
+                    best_metrics = {} # Handle empty case
+
+                # --- Heatmap (Unfiltered - Full View) ---
+                st.subheader("🔥 Score by Parameter Combination (All Results)")
                 try:
                     # import altair as alt (Moved to global scope)
-                    if df_results is not None:
-                        chart = alt.Chart(df_results).mark_rect().encode(
-                            x=alt.X(f'{x_param}:O', title=opt_config["x_label"]),
-                            y=alt.Y(f'{y_param}:O', title=opt_config["y_label"]),
-                            color=alt.Color('return_pct:Q', title='Return %', scale=alt.Scale(scheme='viridis')),
-                            tooltip=[x_param, y_param, 'return_pct', 'max_drawdown', 'trade_count']
-                        ).properties(title="Return % by Parameter Combination")
-                        st.altair_chart(chart, use_container_width=True)
+                    chart = alt.Chart(df_results).mark_rect().encode(
+                        x=alt.X('short_window:O', title='Short Window'),
+                        y=alt.Y('long_window:O', title='Long Window'),
+                        color=alt.Color('score:Q', title='Score', scale=alt.Scale(scheme='viridis')),
+                        tooltip=['short_window', 'long_window', 'return_pct', 'sharpe_ratio', 'max_drawdown', 'score']
+                    ).properties(
+                        title="Optimization Score Heatmap"
+                    )
+                    st.altair_chart(chart, use_container_width=True)
                 except Exception as e:
-                    st.warning(f"Could not render heatmap: {e}")
+                    st.error(f"Heatmap error: {e}")
                     
-                # Results Table
+                # --- Top Results Table (Filtered) ---
+                st.subheader("Top Results (Filtered & Sorted)")
+                
+                if not df_filtered.empty:
+                    st.dataframe(
+                        df_filtered[[
+                            "short_window", "long_window", "score", 
+                            "return_pct", "sharpe_ratio", "max_drawdown", "trade_count"
+                        ]], 
+                        use_container_width=True,
+                        column_config={
+                            "score": st.column_config.NumberColumn("Score", format="%.2f"),
+                            "return_pct": st.column_config.NumberColumn("Return %", format="%.2f%%"),
+                            "sharpe_ratio": st.column_config.NumberColumn("Sharpe", format="%.2f"),
+                            "max_drawdown": st.column_config.NumberColumn("Max DD", format="%.2f"),
+                        }
+                    )
+                else:
+                    st.info("No results match the current filters.")
+
+                        
+                # Save Strategy Logic
+                if not df_filtered.empty:
+                    st.markdown("---")
+                    st.subheader("💾 Save to Strategy Library")
+                    with st.expander("Save Best Parameters as New Strategy", expanded=False):
+                        with st.form("save_best_strategy_form_ma"):
+                            default_name = f"{symbol}_{timeframe}_MACross_Best"
+                            strategy_name = st.text_input("Strategy Name", value=default_name)
+                            strategy_desc = st.text_area("Description", value=f"Grid Search Result. Return: {best_metrics['return_pct']:.2f}%")
+                        
+                            if st.form_submit_button("💾 Save Strategy"):
+                                if not strategy_name:
+                                    st.error("Strategy Name is required.")
+                                else:
+                                    lib = StrategyLibrary()
+                                    new_strategy = {
+                                        "id": str(uuid.uuid4()),
+                                        "name": strategy_name,
+                                        "description": strategy_desc,
+                                        "created_at": datetime.now().isoformat(),
+                                        "symbol": symbol,
+                                        "timeframe": timeframe,
+                                        "strategy_type": "ma_cross",
+                                        "params": {
+                                            "short_window": int(best_row["short_window"]),
+                                            "long_window": int(best_row["long_window"])
+                                        },
+                                        "metrics": best_metrics.to_dict() if hasattr(best_metrics, 'to_dict') else best_metrics
+                                    }
+                                    lib.save_strategy(new_strategy)
+                                    st.success(f"Strategy '{strategy_name}' saved successfully!")
+
+
+    # ==========================================
+    # Optimization Logic Removed
+    # ==========================================
+    # The optimization logic has been moved to render_parameter_optimization_section().
+    # This placeholder is kept to maintain file structure until full migration.
 
     # --- Live Trading Setup (Outside Form) ---
     if strategy_type == "ma_cross":
@@ -1883,9 +2773,9 @@ def render_strategy_lab():
                                 lib.save_strategy(new_strategy)
                                 st.success(f"Strategy '{strategy_name}' saved successfully!")
 
-    if submitted_single and strategy_type not in ["ma_cross", "price_breakout"]: # For other strategies
+    if submitted_single and strategy_type not in ["ma_cross", "price_breakout", "ema9_dip_buy", "rsi_mean_reversion"]: # For other strategies
         # Placeholder for other strategies
-        st.info(f"**{strategy_label}** selected.")
+        st.info(f"**{strategy_cfg['label']}** selected.")
         st.warning("この戦略タイプの自動バックテストは v0.3 以降で実装予定です。")
         st.write("Parameters captured (for future use):")
         if strategy_type == "rsi_mean_reversion":
@@ -1938,197 +2828,40 @@ def render_strategy_lab():
             pass
             
     # ==========================================
-    # Saved Strategies Section
-    # ==========================================
-    st.markdown("---")
-    st.subheader("📚 Saved Strategies")
-    
-    lib = StrategyLibrary()
-    strategies = lib.load_strategies()
-    
-    # Ensure all strategies have favorite field for backward compatibility
-    for s in strategies:
-        if "favorite" not in s:
-            s["favorite"] = False
-    
-    if not strategies:
-        st.info("No strategies saved yet.")
-    else:
-        # Filters
-        st.markdown("#### Filters & Sorting")
-        col_f1, col_f2, col_f3, col_f4 = st.columns(4)
-        
-        with col_f1:
-            # Symbol filter
-            unique_symbols = sorted(set(s["symbol"] for s in strategies))
-            symbol_filter = st.selectbox("Symbol", ["All"] + unique_symbols, key="strat_filter_symbol")
-        
-        with col_f2:
-            # Timeframe filter
-            unique_timeframes = sorted(set(s["timeframe"] for s in strategies))
-            timeframe_filter = st.selectbox("Timeframe", ["All"] + unique_timeframes, key="strat_filter_timeframe")
-        
-        with col_f3:
-            # Favorite filter
-            favorite_only = st.checkbox("⭐ Favorites only", key="strat_filter_favorite")
-        
-        with col_f4:
-            # Sorting
-            sort_options = ["Return (%)", "Max Drawdown", "Created (newest)", "Created (oldest)", "Name"]
-            sort_by = st.selectbox("Sort by", sort_options, key="strat_sort")
-        
-        # Apply filters
-        filtered_strategies = strategies
-        if symbol_filter != "All":
-            filtered_strategies = [s for s in filtered_strategies if s["symbol"] == symbol_filter]
-        if timeframe_filter != "All":
-            filtered_strategies = [s for s in filtered_strategies if s["timeframe"] == timeframe_filter]
-        if favorite_only:
-            filtered_strategies = [s for s in filtered_strategies if s.get("favorite", False)]
-        
-        # Apply sorting
-        if sort_by == "Return (%)":
-            filtered_strategies = sorted(filtered_strategies, key=lambda s: s.get("metrics", {}).get("return_pct", 0), reverse=True)
-        elif sort_by == "Max Drawdown":
-            filtered_strategies = sorted(filtered_strategies, key=lambda s: s.get("metrics", {}).get("max_drawdown", 0))
-        elif sort_by == "Created (newest)":
-            filtered_strategies = sorted(filtered_strategies, key=lambda s: s.get("created_at", ""), reverse=True)
-        elif sort_by == "Created (oldest)":
-            filtered_strategies = sorted(filtered_strategies, key=lambda s: s.get("created_at", ""))
-        elif sort_by == "Name":
-            filtered_strategies = sorted(filtered_strategies, key=lambda s: s.get("name", ""))
-        
-        if not filtered_strategies:
-            st.info("No strategies match the current filters.")
-        else:
-            # Display table
-            st.markdown(f"**Found {len(filtered_strategies)} strategies**")
-            
-            # Create display dataframe
-            strat_rows = []
-            for s in filtered_strategies:
-                row = {
-                    "ID": s["id"],
-                    "⭐": "⭐" if s.get("favorite", False) else "☆",
-                    "Name": s["name"],
-                    "Symbol": s["symbol"],
-                    "Timeframe": s["timeframe"],
-                    "Type": s["strategy_type"],
-                    "Short": s["params"].get("short_window"),
-                    "Long": s["params"].get("long_window"),
-                    "Return (%)": f"{s.get('metrics', {}).get('return_pct', 0):.2f}%",
-                    "Created": s["created_at"][:16].replace("T", " ")
-                }
-                strat_rows.append(row)
-            
-            df_strats = pd.DataFrame(strat_rows)
-            st.dataframe(df_strats.drop(columns=["ID"]), use_container_width=True)
-            
-            # Actions
-            st.markdown("#### Actions")
-            col_action1, col_action2 = st.columns(2)
-            
-            with col_action1:
-                selected_strat_name = st.selectbox(
-                    "Select Strategy", 
-                    options=[s["name"] for s in filtered_strategies],
-                    key="strat_action_selector"
-                )
-            
-            with col_action2:
-                action_cols = st.columns(4)
-                
-                selected_strat = next((s for s in filtered_strategies if s["name"] == selected_strat_name), None)
-                
-                if selected_strat:
-                    with action_cols[0]:
-                        if st.button("⭐ Toggle Favorite", key="strat_action_favorite"):
-                            lib.toggle_favorite(selected_strat["id"])
-                            st.success(f"Toggled favorite for '{selected_strat_name}'")
-                            st.rerun()
-                    
-                    with action_cols[1]:
-                        if st.button("📂 Load", key="strat_action_load"):
-                            st.session_state["strategy_lab_loaded_strategy"] = selected_strat
-                            st.success(f"Loaded '{selected_strat_name}'. Parameters will be applied on next render.")
-                            st.rerun()
-                    
-                    with action_cols[2]:
-                        if st.button("✏️ Rename", key="strat_action_rename"):
-                            st.session_state["rename_strategy_id"] = selected_strat["id"]
-                            st.session_state["rename_strategy_name"] = selected_strat["name"]
-                    
-                    with action_cols[3]:
-                        if st.button("🗑️ Delete", key="strat_action_delete"):
-                            st.session_state["delete_strategy_id"] = selected_strat["id"]
-                            st.session_state["delete_strategy_name"] = selected_strat["name"]
-            
-            # Rename dialog
-            if "rename_strategy_id" in st.session_state:
-                st.markdown("---")
-                st.markdown("### ✏️ Rename Strategy")
-                new_name = st.text_input(
-                    "New Name", 
-                    value=st.session_state.get("rename_strategy_name", ""),
-                    key="rename_input"
-                )
-                col_r1, col_r2 = st.columns(2)
-                with col_r1:
-                    if st.button("💾 Save", key="rename_save"):
-                        if new_name.strip():
-                            lib.update_strategy(st.session_state["rename_strategy_id"], {"name": new_name.strip()})
-                            st.success(f"Renamed to '{new_name}'")
-                            del st.session_state["rename_strategy_id"]
-                            del st.session_state["rename_strategy_name"]
-                            st.rerun()
-                        else:
-                            st.warning("Name cannot be empty")
-                with col_r2:
-                    if st.button("❌ Cancel", key="rename_cancel"):
-                        del st.session_state["rename_strategy_id"]
-                        del st.session_state["rename_strategy_name"]
-                        st.rerun()
-            
-            # Delete confirmation
-            if "delete_strategy_id" in st.session_state:
-                st.markdown("---")
-                st.warning(f"⚠️ Are you sure you want to delete '{st.session_state.get('delete_strategy_name')}'?")
-                col_d1, col_d2 = st.columns(2)
-                with col_d1:
-                    if st.button("🗑️ Confirm Delete", key="delete_confirm"):
-                        lib.delete_strategy(st.session_state["delete_strategy_id"])
-                        st.success(f"Deleted '{st.session_state['delete_strategy_name']}'")
-                        del st.session_state["delete_strategy_id"]
-                        del st.session_state["delete_strategy_name"]
-                        st.rerun()
-                with col_d2:
-                    if st.button("❌ Cancel", key="delete_cancel"):
-                        del st.session_state["delete_strategy_id"]
-                        del st.session_state["delete_strategy_name"]
-                        st.rerun()
-
     # ==========================================
     # Symbol Preset Settings (Developer Tools)
     # ==========================================
-    st.markdown("---")
-    with st.expander("⚙️ Symbol Preset Settings (開発者向け)", expanded=False):
-        st.markdown("### Current Presets")
-        symbols = load_symbol_presets()
+    # This section was moved to its own function: render_symbol_preset_section()
 
-        if symbols:
-            df = pd.DataFrame(symbols)
-            st.dataframe(df, use_container_width=True)
-        else:
-            st.info("No symbol presets found.")
 
-        st.markdown("### Add New Preset")
+def render_symbol_preset_section():
+    """
+    Symbol Preset Settings section - Manage symbol presets (Developer Tools).
+    Ported from the old 'Symbol Preset Settings (Developer Tools)' block.
+    Persists data to 'data/symbol_presets.json' via save_symbol_presets().
+    """
+    st.header("🔧 Symbol Preset Settings")
+    st.caption("Manage default settings and recommended parameters for each symbol. (Developer Mode)")
+    
+    st.markdown("### Current Presets")
+    symbols = load_symbol_presets()
+
+    if symbols:
+        df = pd.DataFrame(symbols)
+        st.dataframe(df, use_container_width=True)
+    else:
+        st.info("No symbol presets found.")
+
+    st.markdown("### Add New Preset")
+    with st.form("add_preset_form"):
         col_add1, col_add2 = st.columns(2)
         with col_add1:
-            new_symbol = st.text_input("Symbol", key="new_symbol_input", placeholder="例: NVDA, 7203.T")
+            new_symbol = st.text_input("Symbol", key="new_symbol_input", placeholder="e.g. NVDA, 7203.T")
         with col_add2:
-            new_label = st.text_input("Label (optional)", key="new_symbol_label", placeholder="例: NVIDIA")
-
-        if st.button("➕ Add Preset"):
+            new_label = st.text_input("Label (optional)", key="new_symbol_label", placeholder="e.g. NVIDIA")
+        
+        submitted = st.form_submit_button("➕ Add Preset")
+        if submitted:
             new_symbol_val = new_symbol.strip().upper()
             if not new_symbol_val:
                 st.warning("Symbol cannot be empty.")
@@ -2144,23 +2877,24 @@ def render_strategy_lab():
                 st.success(f"✅ Added preset: {new_symbol_val}")
                 st.rerun()
 
-        st.markdown("### Delete Preset")
-        if symbols:
+    st.markdown("### Delete Preset")
+    if symbols:
+        with st.form("delete_preset_form"):
             delete_target = st.selectbox(
                 "Select symbol to delete",
                 options=[s["symbol"] for s in symbols],
                 key="delete_symbol_select"
             )
-            if st.button("🗑️ Delete Preset"):
+            if st.form_submit_button("🗑️ Delete Preset"):
                 updated = [s for s in symbols if s["symbol"] != delete_target]
                 if not updated:
-                    st.warning("少なくとも1件のシンボルは残してください。")
+                    st.warning("At least one symbol must remain.")
                 else:
                     save_symbol_presets(updated)
                     st.success(f"✅ Deleted preset: {delete_target}")
                     st.rerun()
-        else:
-            st.info("No presets to delete.")
+    else:
+        st.info("No presets to delete.")
 
 
 class StrategyLibrary:
@@ -2279,6 +3013,22 @@ def main():
         options=["Developer Dashboard", "Backtest Lab", "Strategy Lab", "Live Signal"],
         index=0,
     )
+    
+    # Strategy Lab Section Navigator (shown only when in Strategy Lab mode)
+    lab_section = None
+    if mode == "Strategy Lab":
+        st.sidebar.markdown("---")
+        lab_section = st.sidebar.radio(
+            "📑 Strategy Lab Sections",
+            [
+                "Configuration",
+                "Single Analysis",
+                "Parameter Optimization",
+                "Saved Strategies",
+                "Symbol Preset Settings"
+            ],
+            key="sl_section"
+        )
 
     if mode == "Developer Dashboard":
         # Header

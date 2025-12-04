@@ -1,0 +1,333 @@
+{
+  "strategies": [
+    {
+      "id": "37b1db43-f78d-45a5-b770-c17bcfef3c53",
+      "name": "AAPL_1d_MA_13-40_Best",
+      "description": "Grid Search Result. Return: 1625.54%",
+      "created_at": "2025-12-01T10:34:31.571977",
+      "symbol": "AAPL",
+      "timeframe": "1d",
+      "strategy_type": "ma_cross",
+      "params": {
+        "short_window": 13,
+        "long_window": 40
+      },
+      "metrics": {
+        "total_pnl": 16255377.896675698,
+        "return_pct": 1625.53778966757,
+        "sharpe_ratio": 0.9894853430108015,
+        "max_drawdown": 0.38527103407922464,
+        "win_rate": 1.0,
+        "trade_count": 1
+      },
+      "favorite": true
+    },
+    {
+      "id": "12b59de5-d6b2-40f6-af9a-700ba5ac6000",
+      "name": "AAPL_1d_MA_13-40_Best",
+      "description": "Grid Search Result. Return: 1625.54%",
+      "created_at": "2025-12-01T10:35:16.152888",
+      "symbol": "AAPL",
+      "timeframe": "1d",
+      "strategy_type": "ma_cross",
+      "params": {
+        "short_window": 13,
+        "long_window": 40
+      },
+      "metrics": {
+        "total_pnl": 16255377.660134159,
+        "return_pct": 1625.5377660134159,
+        "sharpe_ratio": 0.9894853013640368,
+        "max_drawdown": 0.38527126908556314,
+        "win_rate": 1.0,
+        "trade_count": 1
+      }
+    },
+    {
+      "id": "4da91c4a-a213-46f9-a98b-6899af42f68d",
+      "name": "7203.T_1d_MA_13-60_Best",
+      "description": "Grid Search Result. Return: 273.51%",
+      "created_at": "2025-12-01T11:24:21.202352",
+      "symbol": "7203.T",
+      "timeframe": "1d",
+      "strategy_type": "ma_cross",
+      "params": {
+        "short_window": 13,
+        "long_window": 60
+      },
+      "metrics": {
+        "total_pnl": 2735098.240535889,
+        "return_pct": 273.5098240535889,
+        "sharpe_ratio": 0.5528386373245282,
+        "max_drawdown": 0.4167589289898348,
+        "win_rate": 1.0,
+        "trade_count": 1
+      },
+      "favorite": true
+    },
+    {
+      "id": "83eb5612-8d55-4227-a13d-851c4958c7e8",
+      "name": "7203.T_1d_MA_13-60_Best",
+      "description": "Grid Search Result. Return: 273.15%",
+      "created_at": "2025-12-01T14:34:46.180959",
+      "symbol": "7203.T",
+      "timeframe": "1d",
+      "strategy_type": "ma_cross",
+      "params": {
+        "short_window": 13,
+        "long_window": 60
+      },
+      "metrics": {
+        "total_pnl": 2731466.098681641,
+        "return_pct": 273.1466098681641,
+        "sharpe_ratio": 0.5525215408309224,
+        "max_drawdown": 0.4167589470849843,
+        "win_rate": 1.0,
+        "trade_count": 1
+      },
+      "favorite": false
+    },
+    {
+      "id": "64175206-438c-4eee-b24b-856581cc80e2",
+      "name": "AAPL_1d_MA_15-75_Best",
+      "description": "Grid Search Result. Return: 1611.22%",
+      "created_at": "2025-12-01T14:48:41.393789",
+      "symbol": "AAPL",
+      "timeframe": "1d",
+      "strategy_type": "ma_cross",
+      "params": {
+        "short_window": 15,
+        "long_window": 75
+      },
+      "metrics": {
+        "total_pnl": 16112189.3122361,
+        "return_pct": 1611.21893122361,
+        "sharpe_ratio": 0.9878581019739618,
+        "max_drawdown": 0.3852724388027624,
+        "win_rate": 1.0,
+        "trade_count": 1
+      },
+      "favorite": false
+    },
+    {
+      "id": "fe80ca4b-e037-4b5e-9598-d475c06fab10",
+      "name": "7203.T_1d_MA_5-75_Best",
+      "description": "Grid Search Result. Return: 277.14%",
+      "created_at": "2025-12-01T16:22:04.725450",
+      "symbol": "7203.T",
+      "timeframe": "1d",
+      "strategy_type": "ma_cross",
+      "params": {
+        "short_window": 5,
+        "long_window": 75
+      },
+      "metrics": {
+        "total_pnl": 2771355.610629272,
+        "return_pct": 277.13556106292725,
+        "sharpe_ratio": 0.5558875683291736,
+        "max_drawdown": 0.41677152763360176,
+        "win_rate": 1.0,
+        "trade_count": 1
+      },
+      "favorite": false
+    },
+    {
+      "id": "29b36f24-88ac-4b34-b6fe-d3d23a20f264",
+      "name": "SMCI_1d_MA_42-75_Best",
+      "description": "Grid Search Result. Return: 1919.98%",
+      "created_at": "2025-12-01T18:22:19.459725",
+      "symbol": "SMCI",
+      "timeframe": "1d",
+      "strategy_type": "ma_cross",
+      "params": {
+        "short_window": 42,
+        "long_window": 75
+      },
+      "metrics": {
+        "total_pnl": 19199787.363164764,
+        "return_pct": 1919.9787363164762,
+        "sharpe_ratio": 0.7141359192666984,
+        "max_drawdown": 0.8484215457507372,
+        "win_rate": 1.0,
+        "trade_count": 1
+      },
+      "favorite": true
+    },
+    {
+      "id": "62335554-4d1f-49e1-b478-952213091a4c",
+      "name": "SMCI_1d_rsi_mean_reversion_Best",
+      "description": "Grid Search Result. Return: 1641.89%",
+      "created_at": "2025-12-02T07:34:13.506891",
+      "symbol": "SMCI",
+      "timeframe": "1d",
+      "strategy_type": "rsi_mean_reversion",
+      "params": {
+        "oversold": 25,
+        "overbought": 100
+      },
+      "metrics": {
+        "total_pnl": 16418911.050036814,
+        "return_pct": 1641.8911050036816,
+        "sharpe_ratio": 0.6950573275225882,
+        "max_drawdown": 0.848423267622067,
+        "win_rate": 1.0,
+        "trade_count": 1
+      },
+      "favorite": false
+    },
+    {
+      "id": "759f045a-edeb-4b59-8530-73283e0d0a83",
+      "name": "SMCI_1d_ema9_dip_buy_BestEMA9 Opt Final Test",
+      "description": "Grid Search Result. Return: -18.08%",
+      "created_at": "2025-12-04T10:57:10.851515",
+      "symbol": "SMCI",
+      "timeframe": "1d",
+      "strategy_type": "ema9_dip_buy",
+      "params": {
+        "deviation_threshold": 2.5,
+        "risk_reward": 1.5,
+        "ema_fast": 9,
+        "ema_slow": 21,
+        "stop_buffer": 0.5,
+        "lookback_volume": 20
+      },
+      "metrics": {
+        "deviation_threshold": 2.5,
+        "risk_reward": 1.5,
+        "total_pnl": -180805.04408950976,
+        "return_pct": -18.080504408950976,
+        "sharpe_ratio": 0.025582500195190188,
+        "max_drawdown": 0.5926599635330837,
+        "win_rate": 0.2857142857142857,
+        "trade_count": 14.0,
+        "score": -8.989087204085108
+      },
+      "favorite": false
+    },
+    {
+      "id": "27d2c76c-f5a5-421c-bb58-7f2d1893ab2c",
+      "name": "SMCI_1d_ma_cross_Best",
+      "description": "Grid Search Result. Return: 5.17%",
+      "created_at": "2025-12-04T16:12:34.004965",
+      "symbol": "SMCI",
+      "timeframe": "1d",
+      "strategy_type": "ma_cross",
+      "params": {
+        "short_window": 5.0,
+        "long_window": 30.0
+      },
+      "metrics": {
+        "short_window": 5.0,
+        "long_window": 30.0,
+        "total_pnl": 51742.92173463083,
+        "return_pct": 5.1742921734630825,
+        "sharpe_ratio": 0.40653352597645526,
+        "max_drawdown": 0.4571712477369998,
+        "win_rate": 0.4,
+        "trade_count": 5.0,
+        "score": 3.400213138684452
+      },
+      "favorite": false
+    },
+    {
+      "id": "f2ece759-9d95-4f3d-80cd-ebb0f920e82d",
+      "name": "SMCI_1d_ma_cross_Best-test",
+      "description": "Grid Search Result. Return: 5.17%",
+      "created_at": "2025-12-04T16:19:17.135525",
+      "symbol": "SMCI",
+      "timeframe": "1d",
+      "strategy_type": "ma_cross",
+      "params": {
+        "short_window": 5.0,
+        "long_window": 30.0
+      },
+      "metrics": {
+        "short_window": 5.0,
+        "long_window": 30.0,
+        "total_pnl": 51742.92173463083,
+        "return_pct": 5.1742921734630825,
+        "sharpe_ratio": 0.40653352597645526,
+        "max_drawdown": 0.4571712477369998,
+        "win_rate": 0.4,
+        "trade_count": 5.0,
+        "score": 3.400213138684452
+      },
+      "favorite": false
+    },
+    {
+      "id": "78cc80be-7631-4357-b24a-0584ab78be5d",
+      "name": "SMCI_1d_ma_cross_Best can you see ",
+      "description": "Grid Search Result. Return: 5.17%",
+      "created_at": "2025-12-04T16:19:58.826309",
+      "symbol": "SMCI",
+      "timeframe": "1d",
+      "strategy_type": "ma_cross",
+      "params": {
+        "short_window": 5.0,
+        "long_window": 30.0
+      },
+      "metrics": {
+        "short_window": 5.0,
+        "long_window": 30.0,
+        "total_pnl": 51742.92173463083,
+        "return_pct": 5.1742921734630825,
+        "sharpe_ratio": 0.40653352597645526,
+        "max_drawdown": 0.4571712477369998,
+        "win_rate": 0.4,
+        "trade_count": 5.0,
+        "score": 3.400213138684452
+      },
+      "favorite": false
+    },
+    {
+      "id": "0860be7e-1cb8-44cf-95b9-411f3cdde591",
+      "name": "SMCI_1d_ma_cross_Best can you see ",
+      "description": "Grid Search Result. Return: 5.17%",
+      "created_at": "2025-12-04T16:20:01.187368",
+      "symbol": "SMCI",
+      "timeframe": "1d",
+      "strategy_type": "ma_cross",
+      "params": {
+        "short_window": 5.0,
+        "long_window": 30.0
+      },
+      "metrics": {
+        "short_window": 5.0,
+        "long_window": 30.0,
+        "total_pnl": 51742.92173463083,
+        "return_pct": 5.1742921734630825,
+        "sharpe_ratio": 0.40653352597645526,
+        "max_drawdown": 0.4571712477369998,
+        "win_rate": 0.4,
+        "trade_count": 5.0,
+        "score": 3.400213138684452
+      },
+      "favorite": false
+    },
+    {
+      "id": "c0f30508-89f7-49a3-8509-5896f70676f6",
+      "name": "HOOD_1d_ma_cross_Best_canyousee",
+      "description": "Grid Search Result. Return: 118.16%",
+      "created_at": "2025-12-04T16:20:41.106586",
+      "symbol": "HOOD",
+      "timeframe": "1d",
+      "strategy_type": "ma_cross",
+      "params": {
+        "short_window": 5.0,
+        "long_window": 20.0
+      },
+      "metrics": {
+        "short_window": 5.0,
+        "long_window": 20.0,
+        "total_pnl": 1181574.322664692,
+        "return_pct": 118.1574322664692,
+        "sharpe_ratio": 1.8022015270378888,
+        "max_drawdown": 0.4992123051650818,
+        "win_rate": 0.6666666666666666,
+        "trade_count": 6.0,
+        "score": 62.683119187310375
+      },
+      "favorite": false
+    }
+  ]
+}

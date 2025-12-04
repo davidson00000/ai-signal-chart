@@ -20,6 +20,7 @@ from backend.strategies.bollinger_breakout import BollingerBreakoutStrategy
 from backend.strategies.donchian_breakout import DonchianBreakoutStrategy
 from backend.strategies.atr_trailing_ma import ATRTrailingMAStrategy
 from backend.strategies.roc_momentum import ROCMomentumStrategy
+from backend.strategies.ema9_dip_buy import EMA9DipBuyStrategy
 
 from backend.models.backtest import (
     BacktestRequest,
@@ -262,18 +263,39 @@ async def run_simulation(request: BacktestRequest):
             strategy = ATRTrailingMAStrategy(**params)
         elif request.strategy == "roc_momentum":
             strategy = ROCMomentumStrategy(**params)
+        elif request.strategy == "ema9_dip_buy":
+            strategy = EMA9DipBuyStrategy(**params)
         else:
             raise HTTPException(status_code=400, detail=f"Unknown strategy: {request.strategy}")
 
         # 3. Run Backtest
-        engine = BacktestEngine(
-            initial_capital=request.initial_capital,
-            commission_rate=request.commission_rate,
-            position_size=request.position_size
-        )
         
-        # Pass start_ts to run_backtest to skip trading during warm-up
-        result = engine.run_backtest(df, strategy, start_date=start_ts)
+        # Use unified runner for MA Cross to ensure consistency with optimizer
+        if request.strategy == "ma_cross":
+            from backend.strategies.runner import run_ma_cross_backtest
+            
+            # Use params if available, else request fields
+            short_window = params.get("short_window", request.short_window)
+            long_window = params.get("long_window", request.long_window)
+            
+            result = run_ma_cross_backtest(
+                df=df,
+                short_window=short_window,
+                long_window=long_window,
+                initial_capital=request.initial_capital,
+                commission_rate=request.commission_rate,
+                start_date=start_ts
+            )
+        else:
+            # Legacy path for other strategies
+            engine = BacktestEngine(
+                initial_capital=request.initial_capital,
+                commission_rate=request.commission_rate,
+                position_size=request.position_size
+            )
+            
+            # Pass start_ts to run_backtest to skip trading during warm-up
+            result = engine.run_backtest(df, strategy, start_date=start_ts)
         
         # 4. Format Response
         # Construct price_series for visualization

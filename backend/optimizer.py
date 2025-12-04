@@ -18,6 +18,7 @@ class OptimizationResult:
     max_drawdown: float
     win_rate: float
     trade_count: int
+    score: float = 0.0
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary"""
@@ -29,7 +30,8 @@ class OptimizationResult:
                 "sharpe_ratio": self.sharpe_ratio,
                 "max_drawdown": self.max_drawdown,
                 "win_rate": self.win_rate,
-                "trade_count": self.trade_count
+                "trade_count": self.trade_count,
+                "score": self.score
             }
         }
 
@@ -63,7 +65,8 @@ class GridSearchOptimizer:
             MACrossStrategy, EMACrossStrategy, MACDTrendStrategy,
             RSIMeanReversionStrategy, StochasticOscillatorStrategy,
             BollingerMeanReversionStrategy, BollingerBreakoutStrategy,
-            DonchianBreakoutStrategy, ATRTrailingMAStrategy, ROCMomentumStrategy
+            DonchianBreakoutStrategy, ATRTrailingMAStrategy, ROCMomentumStrategy,
+            EMA9DipBuyStrategy
         )
         
         # Strategy Factory Map
@@ -78,6 +81,7 @@ class GridSearchOptimizer:
             "donchian_breakout": DonchianBreakoutStrategy,
             "atr_trailing_ma": ATRTrailingMAStrategy,
             "roc_momentum": ROCMomentumStrategy,
+            "ema9_dip_buy": EMA9DipBuyStrategy,
         }
         
         if strategy_type not in STRATEGY_CLASSES:
@@ -137,44 +141,62 @@ class GridSearchOptimizer:
             # Merge with fixed params
             full_params = {**fixed_params, **params}
             
-            # Basic validation for window params
+            # Basic validation for window params (specific to MA strategies, but harmless for others if keys don't exist)
             if "short_window" in full_params and "long_window" in full_params:
                 if full_params["short_window"] >= full_params["long_window"]:
                     continue
             
-            # Create strategy instance
+            # Create strategy instance and run backtest
             try:
+                # Generic Backtest Execution
                 strategy = strategy_cls(**full_params)
                 
-                # Run backtest
                 engine = BacktestEngine(
                     initial_capital=initial_capital,
                     commission_rate=commission_rate,
                     position_size=position_size
                 )
                 
-                backtest_result = engine.run_backtest(df, strategy, start_date=backtest_start_dt)
+                # Run Backtest
+                result = engine.run_backtest(df, strategy, start_date=backtest_start_dt)
                 
-                # Extract stats from result
-                stats = backtest_result.get("stats", {})
+                stats = result["stats"]
                 
-                # Store result
-                results.append(OptimizationResult(
-                    params=params, # Store only optimized params to avoid clutter
-                    total_pnl=stats.get("total_pnl", 0.0),
-                    return_pct=stats.get("return_pct", 0.0),
-                    sharpe_ratio=stats.get("sharpe_ratio", 0.0),
-                    max_drawdown=stats.get("max_drawdown", 0.0),
-                    win_rate=stats.get("win_rate", 0.0),
-                    trade_count=stats.get("trade_count", 0)
-                ))
+                # Compute Score (Objective Function)
+                # Score = Sharpe * 2.0 + Return * 0.5
+                # Penalties: Trade Count < 5 => -1e9, Max DD > 70 => -1e9
+                
+                trade_count = stats["trade_count"]
+                max_dd = stats["max_drawdown"] * 100 # Convert to percentage
+                sharpe = stats["sharpe_ratio"]
+                ret_pct = stats["return_pct"]
+                
+                if trade_count < 5:
+                    score = -1e9
+                elif max_dd > 70.0:
+                    score = -1e9
+                else:
+                    score = (sharpe * 2.0) + (ret_pct * 0.5)
+                
+                opt_res = OptimizationResult(
+                    params=params,
+                    total_pnl=stats["total_pnl"],
+                    return_pct=stats["return_pct"],
+                    sharpe_ratio=stats["sharpe_ratio"],
+                    max_drawdown=stats["max_drawdown"],
+                    win_rate=stats["win_rate"],
+                    trade_count=stats["trade_count"],
+                    score=score
+                )
+                
+                results.append(opt_res)
                 
             except Exception as e:
-                # Skip failed combinations
+                # print(f"Error optimizing {combo}: {e}")
                 continue
-        
-        # Sort by total PnL (descending)
-        results.sort(key=lambda x: x.total_pnl, reverse=True)
+                
+        # Sort by Score (Descending)
+        results.sort(key=lambda x: x.score, reverse=True)
         
         return results
 

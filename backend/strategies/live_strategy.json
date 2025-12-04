@@ -1,0 +1,18 @@
+{
+  "symbol": "SMCI",
+  "timeframe": "1d",
+  "strategy_name": "MA Crossover",
+  "strategy_type": "ma_cross",
+  "params": {
+    "short_window": 9,
+    "long_window": 21
+  },
+  "risk": {
+    "position_mode": "fixed_amount_jpy",
+    "position_value": 100000.0
+  },
+  "meta": {
+    "created_at": "2025-12-03T12:04:29.850504",
+    "note": ""
+  }
+}
