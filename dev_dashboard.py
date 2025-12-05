@@ -17,6 +17,7 @@ import requests
 import altair as alt
 from datetime import datetime, timedelta
 import uuid
+import time
 from strategy_guides import STRATEGY_GUIDES
 
 # ============================================================================
