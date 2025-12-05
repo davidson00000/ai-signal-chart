@@ -1370,6 +1370,17 @@ def close_paper_position(position_id: str, req: ClosePaperPositionRequest):
     return trade_log
 
 
+@paper_router.delete("/positions/{position_id}", status_code=204)
+def delete_paper_position(position_id: str):
+    """
+    Delete a position (cancel). Only allowed if it exists.
+    """
+    deleted = paper_store.delete_position(position_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Position not found")
+    return None
+
+
 @paper_router.get("/trades", response_model=List[PaperTradeLog])
 def list_trades(account_id: str = "default"):
     return paper_store.get_trades_by_account(account_id)

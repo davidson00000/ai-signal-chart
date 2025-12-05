@@ -132,6 +132,16 @@ class InMemoryPaperStore:
     def get_trades_by_account(self, account_id: str) -> List[PaperTradeLog]:
         return [t for t in self.trades.values() if t.account_id == account_id]
 
+    def delete_position(self, position_id: str) -> bool:
+        """
+        Hard delete a position (e.g. for cancellation).
+        Returns True if deleted, False if not found.
+        """
+        if position_id in self.positions:
+            del self.positions[position_id]
+            return True
+        return False
+
     def close_position(self, position_id: str, exit_price: float, closed_at: datetime) -> PaperTradeLog:
         """
         Close an existing position and generate a trade log.

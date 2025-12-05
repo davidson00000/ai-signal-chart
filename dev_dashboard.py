@@ -4193,28 +4193,151 @@ def render_live_signal():
                         except Exception as e:
                             st.error(f"Error: {e}")
             
-            # Optional: Show Open Positions
+            # =================================================================
+            # Open Paper Positions (Improved)
+            # =================================================================
             try:
                 resp = requests.get(f"{BACKEND_URL}/paper/positions/open", params={"account_id": "default"}, timeout=5)
                 if resp.status_code == 200:
                     positions = resp.json()
                     symbol_positions = [p for p in positions if p.get("symbol") == paper_symbol]
+                    
                     if symbol_positions:
-                        st.markdown("#### Open Paper Positions")
+                        st.markdown("#### 🟢 Open Paper Positions")
                         
-                        # Simple table
-                        pt_data = []
+                        # Header
+                        h1, h2, h3, h4, h5, h6, h7, h8 = st.columns([1.5, 0.8, 0.8, 1, 1, 1, 1, 2])
+                        h1.markdown("**ID**")
+                        h2.markdown("**Dir**")
+                        h3.markdown("**Size**")
+                        h4.markdown("**Entry**")
+                        h5.markdown("**Current**")
+                        h6.markdown("**PnL ($)**")
+                        h7.markdown("**R (Risk)**")
+                        h8.markdown("**Actions**")
+                        
                         for p in symbol_positions:
-                            pt_data.append({
-                                "ID": p["position_id"],
-                                "Dir": p["direction"],
-                                "Size": p["size"],
-                                "Entry": p["entry_price"],
-                                "Time": p["opened_at"]
+                            pos_id = p["position_id"]
+                            direction = p["direction"]
+                            size = p["size"]
+                            entry = p["entry_price"]
+                            current = paper_price
+                            
+                            # Calc PnL
+                            if direction == "LONG":
+                                pnl = (current - entry) * size
+                            else:
+                                pnl = (entry - current) * size
+                                
+                            # Calc R (approximate if stop not set, use 1R = 1% equity or just display raw risk if available)
+                            # Here we use the backend's r_risk() logic if available, but we don't have it in the response directly unless we added it.
+                            # The backend model has r_risk() method but it's not a field in JSON unless computed.
+                            # We'll compute R-multiple based on a hypothetical risk or just show PnL.
+                            # User asked for "Unrealized R-multiple".
+                            # r_multiple = pnl / (risk_value). We need risk_value.
+                            # We can try to estimate risk from stop_price if available.
+                            stop_price = p.get("stop_price")
+                            risk_val = 0.0
+                            if stop_price:
+                                if direction == "LONG":
+                                    risk_val = (entry - stop_price) * size
+                                else:
+                                    risk_val = (stop_price - entry) * size
+                            
+                            r_mult_str = "N/A"
+                            if risk_val > 0:
+                                r_mult = pnl / risk_val
+                                r_mult_str = f"{r_mult:+.2f}R"
+                            
+                            # Color for PnL
+                            pnl_color = "green" if pnl >= 0 else "red"
+                            
+                            c1, c2, c3, c4, c5, c6, c7, c8 = st.columns([1.5, 0.8, 0.8, 1, 1, 1, 1, 2])
+                            
+                            c1.caption(pos_id.split("-")[-1]) # Short ID
+                            c2.write(direction)
+                            c3.write(f"{size}")
+                            c4.write(f"{entry:.2f}")
+                            c5.write(f"{current:.2f}")
+                            c6.markdown(f":{pnl_color}[{pnl:+.2f}]")
+                            c7.write(r_mult_str)
+                            
+                            with c8:
+                                ac1, ac2 = st.columns(2)
+                                with ac1:
+                                    if st.button("Close", key=f"close_{pos_id}", type="primary", use_container_width=True):
+                                        # Close Position
+                                        try:
+                                            cl_resp = requests.post(
+                                                f"{BACKEND_URL}/paper/positions/{pos_id}/close",
+                                                json={"exit_price": current},
+                                                timeout=10
+                                            )
+                                            if cl_resp.status_code == 200:
+                                                st.success(f"Closed {pos_id}")
+                                                # Force reload by updating session state dummy
+                                                st.session_state["_paper_update"] = datetime.now()
+                                            else:
+                                                st.error("Failed")
+                                        except Exception as e:
+                                            st.error(f"Err: {e}")
+                                            
+                                with ac2:
+                                    if st.button("×", key=f"del_{pos_id}", help="Delete (Cancel)", use_container_width=True):
+                                        # Delete Position
+                                        try:
+                                            del_resp = requests.delete(f"{BACKEND_URL}/paper/positions/{pos_id}", timeout=10)
+                                            if del_resp.status_code == 204:
+                                                st.warning(f"Deleted {pos_id}")
+                                                st.session_state["_paper_update"] = datetime.now()
+                                            else:
+                                                st.error("Failed")
+                                        except Exception as e:
+                                            st.error(f"Err: {e}")
+
+            except Exception as e:
+                st.error(f"Error fetching positions: {e}")
+
+            # =================================================================
+            # Closed Paper Trades (History)
+            # =================================================================
+            try:
+                t_resp = requests.get(f"{BACKEND_URL}/paper/trades", params={"account_id": "default"}, timeout=5)
+                if t_resp.status_code == 200:
+                    trades = t_resp.json()
+                    # Filter by symbol if desired, or show all? User asked for "Closed Trades section to Live Signal".
+                    # Usually context is symbol-specific. Let's filter by symbol.
+                    symbol_trades = [t for t in trades if t.get("symbol") == paper_symbol]
+                    
+                    if symbol_trades:
+                        st.markdown("#### 🏁 Closed Paper Trades")
+                        
+                        # Sort by closed_at desc
+                        symbol_trades.sort(key=lambda x: x.get("closed_at") or "", reverse=True)
+                        
+                        t_data = []
+                        for t in symbol_trades:
+                            t_data.append({
+                                "Time": t.get("closed_at", "")[:16].replace("T", " "),
+                                "Dir": t["direction"],
+                                "Size": t["size"],
+                                "Entry": t["entry_price"],
+                                "Exit": t["exit_price"],
+                                "PnL ($)": t["net_pnl"],
+                                "R": t["r_multiple"]
                             })
-                        st.dataframe(pt_data, use_container_width=True)
+                        
+                        st.dataframe(
+                            t_data, 
+                            use_container_width=True,
+                            column_config={
+                                "PnL ($)": st.column_config.NumberColumn(format="$%.2f"),
+                                "R": st.column_config.NumberColumn(format="%.2fR"),
+                            }
+                        )
             except Exception:
-                pass # Fail silently for summary
+                pass
+
 
         st.markdown("---")
         
