@@ -46,34 +46,28 @@ class PaperPosition(BaseModel):
     opened_at: datetime
     closed_at: Optional[datetime] = None
     status: Literal["OPEN", "CLOSED"] = "OPEN"
-    tags: List[str] = []
+    tags: List[str] = Field(default_factory=list)
 
     def is_open(self) -> bool:
         return self.status == "OPEN"
 
     def r_risk(self) -> float:
         """
-        Return the risk in R units if stop_price is set.
-        R = (entry_price - stop_price) * size * direction_sign.
-        LONG: risk = entry - stop
-        SHORT: risk = stop - entry
-        
-        Note: This returns the risk amount in currency units (e.g. $), not R-multiple.
-        Wait, the user description says "Return the risk in R units".
-        But the formula "risk = entry - stop" implies currency difference per share.
-        Multiplied by size, it's total currency risk.
-        Usually "R unit" means the risk amount itself (1R).
-        So this returns the value of 1R in currency.
+        Return the monetary risk amount (1R) for this position.
+        If stop_price is not set or risk is invalid/negative, return 0.0.
         """
-        if self.stop_price is None:
+        if self.stop_price is None or self.size == 0:
             return 0.0
-        
+
         if self.direction == "LONG":
             risk_per_share = self.entry_price - self.stop_price
-        else:
+        else:  # SHORT
             risk_per_share = self.stop_price - self.entry_price
-            
-        return risk_per_share * self.size
+
+        risk = risk_per_share * self.size
+        if risk <= 0:
+            return 0.0
+        return risk
 
 
 # ============================================================================
@@ -134,6 +128,9 @@ class InMemoryPaperStore:
             p for p in self.positions.values()
             if p.account_id == account_id and p.status == "OPEN"
         ]
+        
+    def get_trades_by_account(self, account_id: str) -> List[PaperTradeLog]:
+        return [t for t in self.trades.values() if t.account_id == account_id]
 
     def close_position(self, position_id: str, exit_price: float, closed_at: datetime) -> PaperTradeLog:
         """

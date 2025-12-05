@@ -2,9 +2,10 @@
 FastAPI Backend for AI Signal Chart Backtest System
 """
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Literal
+from pydantic import BaseModel
 import pandas as pd
 from datetime import datetime, timedelta
 
@@ -40,6 +41,16 @@ from backend.models.strategy_lab import (
     StrategyLabSymbolResult
 )
 from backend.strategy.models import JsonStrategyRunRequest
+
+from backend.models.paper_trade import (
+    PaperAccount,
+    PaperPosition,
+    PaperTradeLog,
+    InMemoryPaperStore,
+)
+
+# Global In-Memory Store for Paper Trading
+paper_store = InMemoryPaperStore()
 
 
 app = FastAPI(title="AI Signal Chart Backtest API", version="0.1.0")
@@ -1221,6 +1232,150 @@ async def scan_market_endpoint(
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Market scan failed: {str(e)}")
 
+
+
+# ============================================================================
+# Paper Trading API
+# ============================================================================
+
+class CreatePaperAccountRequest(BaseModel):
+    account_id: str = "default"
+    initial_equity: float
+    base_currency: str = "USD"
+
+
+class OpenPaperPositionRequest(BaseModel):
+    account_id: str = "default"
+    symbol: str
+    direction: Literal["LONG", "SHORT"]
+    size: float
+    entry_price: float
+    stop_price: Optional[float] = None
+    target_price: Optional[float] = None
+    opened_at: Optional[datetime] = None
+    tags: List[str] = []
+
+
+class ClosePaperPositionRequest(BaseModel):
+    exit_price: float
+    closed_at: Optional[datetime] = None
+
+
+paper_router = APIRouter(prefix="/paper", tags=["paper_trading"])
+
+
+@paper_router.post("/accounts", response_model=PaperAccount)
+def create_paper_account(req: CreatePaperAccountRequest):
+    now = datetime.utcnow()
+
+    account = PaperAccount(
+        account_id=req.account_id,
+        base_currency=req.base_currency,
+        initial_equity=req.initial_equity,
+        equity=req.initial_equity,
+        cash=req.initial_equity,
+        open_risk=0.0,
+        created_at=now,
+        updated_at=now,
+    )
+    paper_store.upsert_account(account)
+    return account
+
+
+@paper_router.get("/accounts/{account_id}", response_model=PaperAccount)
+def get_paper_account(account_id: str):
+    account = paper_store.get_account(account_id)
+    if account is None:
+        raise HTTPException(status_code=404, detail="Paper account not found")
+    return account
+
+
+@paper_router.post("/positions", response_model=PaperPosition)
+def open_paper_position(req: OpenPaperPositionRequest):
+    account = paper_store.get_account(req.account_id)
+    if account is None:
+        raise HTTPException(status_code=404, detail="Paper account not found")
+
+    opened_at = req.opened_at or datetime.utcnow()
+
+    # Create position_id (simple scheme; can be improved later)
+    position_id = f"{req.account_id}-{req.symbol}-{int(opened_at.timestamp())}"
+
+    position = PaperPosition(
+        position_id=position_id,
+        account_id=req.account_id,
+        symbol=req.symbol,
+        direction=req.direction,
+        size=req.size,
+        entry_price=req.entry_price,
+        stop_price=req.stop_price,
+        target_price=req.target_price,
+        opened_at=opened_at,
+        closed_at=None,
+        status="OPEN",
+        tags=req.tags,
+    )
+
+    # Store position
+    try:
+        paper_store.add_position(position)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    # Optionally update account risk (equity/cash adjustments can be added later)
+    risk_amount = position.r_risk()
+    if risk_amount > 0:
+        account.open_risk += risk_amount
+        account.updated_at = datetime.utcnow()
+        paper_store.upsert_account(account)
+
+    return position
+
+
+@paper_router.get("/positions/open", response_model=List[PaperPosition])
+def get_open_positions(account_id: str = "default"):
+    return paper_store.get_open_positions(account_id)
+
+
+@paper_router.post("/positions/{position_id}/close", response_model=PaperTradeLog)
+def close_paper_position(position_id: str, req: ClosePaperPositionRequest):
+    position = paper_store.positions.get(position_id)
+    if position is None:
+        raise HTTPException(status_code=404, detail="Position not found")
+
+    closed_at = req.closed_at or datetime.utcnow()
+
+    try:
+        trade_log = paper_store.close_position(
+            position_id=position_id,
+            exit_price=req.exit_price,
+            closed_at=closed_at,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    # Update account risk
+    account = paper_store.get_account(trade_log.account_id)
+    if account:
+        # Subtract old risk (we don't recalc exactly; simple approach)
+        risk_amount = position.r_risk()
+        if risk_amount > 0:
+            account.open_risk = max(0.0, account.open_risk - risk_amount)
+        # Update equity by realized PnL
+        account.equity += trade_log.net_pnl
+        account.cash += trade_log.net_pnl
+        account.updated_at = datetime.utcnow()
+        paper_store.upsert_account(account)
+
+    return trade_log
+
+
+@paper_router.get("/trades", response_model=List[PaperTradeLog])
+def list_trades(account_id: str = "default"):
+    return paper_store.get_trades_by_account(account_id)
+
+
+app.include_router(paper_router)
 
 
 if __name__ == "__main__":
