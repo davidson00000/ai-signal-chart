@@ -87,7 +87,7 @@ STRATEGY_TEMPLATES = {
 }
 import os
 import json
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Tuple, Optional
 from pathlib import Path
 
 import numpy as np
@@ -142,6 +142,33 @@ if universe_from_q and "universe" not in st.session_state:
 # ============================================================================
 # Helpers
 # ============================================================================
+
+def ensure_paper_account(base_url: str, initial_equity: float = 100000.0) -> Optional[dict]:
+    """
+    Ensure that a default paper account exists.
+    If it doesn't, create it with the given initial equity.
+    Return the account dict on success, or None on failure.
+    """
+    try:
+        # Try to fetch existing account
+        resp = requests.get(f"{base_url}/paper/accounts/default", timeout=10)
+        if resp.status_code == 200:
+            return resp.json()
+
+        # If not found, create a new account
+        if resp.status_code == 404:
+            create_resp = requests.post(
+                f"{base_url}/paper/accounts",
+                json={"account_id": "default", "initial_equity": initial_equity},
+                timeout=10,
+            )
+            if create_resp.status_code == 200:
+                return create_resp.json()
+
+        return None
+    except Exception as e:
+        print(f"[PaperTrading] ensure_paper_account failed: {e}")
+        return None
 
 def render_predictor_card(title, pred):
     direction = pred.get("direction", "flat").upper()
@@ -2940,6 +2967,8 @@ def _old_strategy_lab_code():
     # The optimization logic has been moved to render_parameter_optimization_section().
     # This placeholder is kept to maintain file structure until full migration.
 
+
+
     # --- Live Trading Setup (Outside Form) ---
     if strategy_type == "ma_cross":
         st.divider()
@@ -4083,6 +4112,110 @@ def render_live_signal():
         with m3:
             st.info(f"**Reason:** {final_signal.get('reason', 'N/A')}")
             
+        st.markdown("---")
+        
+        # =====================================================================
+        # 🧪 Paper Trading Panel
+        # =====================================================================
+        with st.container():
+            st.markdown("### 🧪 Paper Trading (Experimental)")
+            
+            # Use current Live Signal symbol and latest price
+            paper_symbol = symbol
+            paper_price = latest_price
+            
+            col_pt_info, col_pt_input = st.columns([1, 2])
+            with col_pt_info:
+                st.write(f"**Symbol:** {paper_symbol}")
+                st.write(f"**Price:** ${paper_price:,.2f}")
+                
+            with col_pt_input:
+                pt_size = st.number_input(
+                    "Position Size (units)",
+                    min_value=0.1,
+                    max_value=100000.0,
+                    value=1.0,
+                    step=0.1,
+                    key="paper_trade_size",
+                )
+            
+            col_long, col_short = st.columns(2)
+            
+            with col_long:
+                if st.button("✅ Open LONG (Paper)", key="paper_open_long", use_container_width=True):
+                    account = ensure_paper_account(BACKEND_URL)
+                    if not account:
+                        st.error("Failed to initialize paper account.")
+                    else:
+                        payload = {
+                            "account_id": "default",
+                            "symbol": paper_symbol,
+                            "direction": "LONG",
+                            "size": float(pt_size),
+                            "entry_price": float(paper_price),
+                            "stop_price": None,
+                            "target_price": None,
+                            "tags": ["live_signal"],
+                        }
+                        try:
+                            resp = requests.post(f"{BACKEND_URL}/paper/positions", json=payload, timeout=15)
+                            if resp.status_code == 200:
+                                pos = resp.json()
+                                st.success(f"Opened LONG: {pos.get('position_id')} @ {paper_price:.2f}")
+                            else:
+                                st.error(f"Failed: {resp.status_code} {resp.text}")
+                        except Exception as e:
+                            st.error(f"Error: {e}")
+
+            with col_short:
+                if st.button("❌ Open SHORT (Paper)", key="paper_open_short", use_container_width=True):
+                    account = ensure_paper_account(BACKEND_URL)
+                    if not account:
+                        st.error("Failed to initialize paper account.")
+                    else:
+                        payload = {
+                            "account_id": "default",
+                            "symbol": paper_symbol,
+                            "direction": "SHORT",
+                            "size": float(pt_size),
+                            "entry_price": float(paper_price),
+                            "stop_price": None,
+                            "target_price": None,
+                            "tags": ["live_signal"],
+                        }
+                        try:
+                            resp = requests.post(f"{BACKEND_URL}/paper/positions", json=payload, timeout=15)
+                            if resp.status_code == 200:
+                                pos = resp.json()
+                                st.success(f"Opened SHORT: {pos.get('position_id')} @ {paper_price:.2f}")
+                            else:
+                                st.error(f"Failed: {resp.status_code} {resp.text}")
+                        except Exception as e:
+                            st.error(f"Error: {e}")
+            
+            # Optional: Show Open Positions
+            try:
+                resp = requests.get(f"{BACKEND_URL}/paper/positions/open", params={"account_id": "default"}, timeout=5)
+                if resp.status_code == 200:
+                    positions = resp.json()
+                    symbol_positions = [p for p in positions if p.get("symbol") == paper_symbol]
+                    if symbol_positions:
+                        st.markdown("#### Open Paper Positions")
+                        
+                        # Simple table
+                        pt_data = []
+                        for p in symbol_positions:
+                            pt_data.append({
+                                "ID": p["position_id"],
+                                "Dir": p["direction"],
+                                "Size": p["size"],
+                                "Entry": p["entry_price"],
+                                "Time": p["opened_at"]
+                            })
+                        st.dataframe(pt_data, use_container_width=True)
+            except Exception:
+                pass # Fail silently for summary
+
         st.markdown("---")
         
         # 2. Predictor Breakdown
