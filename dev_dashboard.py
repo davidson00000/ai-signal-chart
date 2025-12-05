@@ -102,90 +102,42 @@ from backend.strategies import (
 )
 
 # ============================================================================
-# URL Query Parameter Handling
+# URL Query Parameter Handling (Centralized State)
 # ============================================================================
 
-def handle_url_params():
-    """
-    Parse URL parameters and initialize session state accordingly.
-    Supported params:
-    - mode: "live_signal", "market_scanner", etc.
-    - symbol: "NVDA", "AAPL", etc.
-    - timeframe: "1d", "4h", etc.
-    """
-    # Initialize session state for mode if not exists
-    if "mode" not in st.session_state:
-        st.session_state["mode"] = "Developer Dashboard"
+# Parse URL parameters at the very start
+# We use st.query_params (Streamlit 1.30+) which behaves like a dict
+query_params = st.query_params
 
+mode_from_q = query_params.get("mode")
+symbol_from_q = query_params.get("symbol")
+timeframe_from_q = query_params.get("timeframe")
+lookback_from_q = query_params.get("lookback")
+universe_from_q = query_params.get("universe")
+
+# Initialize session_state from query (only if not already set)
+# This ensures that if a user bookmarks a URL, the app loads in the correct state.
+if mode_from_q and "mode" not in st.session_state:
+    st.session_state["mode"] = (
+        "Market Scanner" if mode_from_q == "scanner"
+        else "Live Signal" if mode_from_q == "live_signal"
+        else "Developer Dashboard"
+    )
+
+if symbol_from_q and "symbol" not in st.session_state:
+    st.session_state["symbol"] = symbol_from_q
+
+if timeframe_from_q and "timeframe" not in st.session_state:
+    st.session_state["timeframe"] = timeframe_from_q
+
+if lookback_from_q and "lookback" not in st.session_state:
     try:
-        query_params = st.query_params
-        
-        # 1. Handle Mode
-        url_mode = query_params.get("mode")
-        if url_mode:
-            mode_map = {
-                "dashboard": "Developer Dashboard",
-                "backtest": "Backtest Lab",
-                "strategy": "Strategy Lab",
-                "live_signal": "Live Signal",
-                "predictor": "Predictor Backtest Lab",
-                "scanner": "Market Scanner"
-            }
-            if url_mode in mode_map:
-                st.session_state["mode"] = mode_map[url_mode]
-        
-        # 2. Handle Live Signal Params (Symbol, Timeframe)
-        # We use the existing 'nav_live_signal' mechanism to pass these values
-        url_symbol = query_params.get("symbol")
-        url_timeframe = query_params.get("timeframe")
-        
-        if url_symbol and st.session_state["mode"] == "Live Signal":
-            # Only trigger navigation if not already set to avoid loop
-            if "nav_live_signal" not in st.session_state:
-                st.session_state["nav_live_signal"] = {
-                    "symbol": url_symbol,
-                    "timeframe": url_timeframe if url_timeframe else "1d",
-                    "lookback": 200 # Default
-                }
-                
-    except Exception as e:
-        print(f"Error parsing URL params: {e}")
+        st.session_state["lookback"] = int(lookback_from_q)
+    except ValueError:
+        pass
 
-# ============================================================================
-# Navigation Helpers
-# ============================================================================
-
-def go_to_live_signal(symbol: str, timeframe: str = "1d", lookback: int = 200):
-    st.session_state["mode"] = "Live Signal"
-    
-    st.session_state["live_symbol"] = symbol
-    st.session_state["live_timeframe"] = timeframe
-    st.session_state["live_lookback"] = lookback
-    
-    # Sync URL
-    st.query_params["mode"] = "live_signal"
-    st.query_params["symbol"] = symbol
-    st.query_params["timeframe"] = timeframe
-    st.query_params["lookback"] = str(lookback)
-    
-    st.rerun()
-
-def go_to_scanner(universe: str = "default", timeframe: str = "1d", lookback: int = 200):
-    st.session_state["mode"] = "Market Scanner"
-    
-    st.session_state["scanner_universe"] = universe
-    st.session_state["scanner_timeframe"] = timeframe
-    st.session_state["scanner_lookback"] = lookback
-    
-    st.query_params["mode"] = "scanner"
-    st.query_params["universe"] = universe
-    st.query_params["timeframe"] = timeframe
-    st.query_params["lookback"] = str(lookback)
-    
-    st.rerun()
-
-# Call immediately on script load
-handle_url_params()
+if universe_from_q and "universe" not in st.session_state:
+    st.session_state["universe"] = universe_from_q
 
 # ============================================================================
 # Helpers
@@ -3387,21 +3339,18 @@ def main():
 
     # Sidebar mode switch
     # Use session state to control default selection if navigated from URL
-    default_index = 0
-    if "mode" in st.session_state:
-        options = ["Developer Dashboard", "Backtest Lab", "Strategy Lab", "Live Signal", "Predictor Backtest Lab", "Market Scanner"]
-        if st.session_state["mode"] in options:
-            default_index = options.index(st.session_state["mode"])
+    # We bind directly to "mode" key so st.session_state["mode"] is automatically updated
+    
+    # Ensure mode is in options, otherwise default to Dashboard
+    options = ["Developer Dashboard", "Backtest Lab", "Strategy Lab", "Live Signal", "Predictor Backtest Lab", "Market Scanner"]
+    if st.session_state.get("mode") not in options:
+        st.session_state["mode"] = "Developer Dashboard"
 
     mode = st.sidebar.selectbox(
         "Mode",
-        options=["Developer Dashboard", "Backtest Lab", "Strategy Lab", "Live Signal", "Predictor Backtest Lab", "Market Scanner"],
-        index=default_index,
-        key="mode_selector"
+        options=options,
+        key="mode"
     )
-    
-    # Update session state and URL params
-    st.session_state["mode"] = mode
     
     mode_map_rev = {
         "Developer Dashboard": "dashboard",
@@ -3412,11 +3361,16 @@ def main():
         "Market Scanner": "scanner"
     }
     
-    # Update URL params
-    params = st.query_params.to_dict()
-    params["mode"] = mode_map_rev.get(mode, "dashboard")
-    st.query_params.clear()
-    st.query_params.update(params)
+    # Update URL params whenever mode changes
+    # We can do this by checking if the URL param matches the current mode
+    current_url_mode = st.query_params.get("mode")
+    target_url_mode = mode_map_rev.get(mode, "dashboard")
+    
+    if current_url_mode != target_url_mode:
+        params = st.query_params.to_dict()
+        params["mode"] = target_url_mode
+        st.query_params.clear()
+        st.query_params.update(params)
     
     # Strategy Lab Section Navigator (shown only when in Strategy Lab mode)
     lab_section = None
@@ -3631,10 +3585,23 @@ def render_market_scanner():
         
         # Navigation buttons for each symbol
         st.markdown("---")
-        st.subheader("🔗 Quick Actions")
+        st.subheader("🧭 Quick Actions")
         st.caption("Click a symbol to open it in Live Signal with current settings.")
         
         # Display buttons in grid (4 per row)
+        import urllib.parse
+        
+        cols = st.columns(len(results))
+        # Limit to first 8 results to avoid clutter if list is long, or just use grid
+        # The user's snippet implies a row per result or columns matching results.
+        # Let's stick to the grid layout but use the link logic.
+        
+        # Actually, the user snippet used `cols = st.columns(len(results))` which implies a single row.
+        # But previous code had a grid. Let's adapt the user's snippet to the grid structure if possible,
+        # or just use the user's snippet if results are few.
+        # The previous code handled pagination/grid.
+        # Let's use a grid layout but render HTML links inside.
+        
         cols_per_row = 4
         for i in range(0, len(results), cols_per_row):
             cols = st.columns(cols_per_row)
@@ -3652,17 +3619,39 @@ def render_market_scanner():
                     elif "STRONG_DOWN" in signal: signal_emoji = "🔴"
                     elif "DOWN" in signal: signal_emoji = "🟠"
                     
+                    # Construct URL
+                    live_params = {
+                        "mode": "live_signal",
+                        "symbol": symbol_name,
+                        "timeframe": timeframe,
+                        "lookback": str(lookback),
+                        "universe": universe,
+                    }
+                    live_query = urllib.parse.urlencode(live_params)
+                    live_href = f"?{live_query}"
+                    
                     with col:
-                        st.button(
-                            f"{signal_emoji} {symbol_name} ({score:.1f})",
-                            key=f"nav_live_{symbol_name}",
-                            use_container_width=True,
-                            on_click=go_to_live_signal,
-                            kwargs={
-                                "symbol": symbol_name,
-                                "timeframe": timeframe,
-                                "lookback": lookback,
-                            }
+                        # Render as HTML link styled like a button
+                        st.markdown(
+                            f"""
+                            <a href="{live_href}" target="_self" style="text-decoration: none;">
+                              <div style="
+                                  width: 100%;
+                                  padding: 6px 10px;
+                                  border-radius: 8px;
+                                  border: 1px solid #444;
+                                  background-color: {'#113B5C' if score >= 0 else '#5C1111'};
+                                  color: white;
+                                  font-size: 14px;
+                                  text-align: center;
+                                  cursor: pointer;
+                                  display: block;
+                              ">
+                                {signal_emoji} {symbol_name} ({score:+.2f})
+                              </div>
+                            </a>
+                            """,
+                            unsafe_allow_html=True,
                         )
         
         st.info("💡 Tip: Click a symbol button above to instantly open **Live Signal** with that ticker preloaded.")
@@ -3865,23 +3854,58 @@ def render_live_signal():
     with col_back:
         st.write("")
         st.write("")
-        if st.button("⬅️ Back to Scanner", use_container_width=True):
-            go_to_scanner(
-                universe=st.session_state.get("scanner_universe", "default"),
-                timeframe=st.session_state.get("scanner_timeframe", "1d"),
-                lookback=st.session_state.get("scanner_lookback", 200),
-            )
+        
+        # Back to Scanner Link
+        import urllib.parse
+        
+        scanner_universe = st.session_state.get("universe", "default")
+        scanner_timeframe = st.session_state.get("timeframe", "1d")
+        scanner_lookback = st.session_state.get("lookback", 200)
+        current_symbol = st.session_state.get("symbol", "SMCI")
+        
+        scanner_params = {
+            "mode": "scanner",
+            "symbol": current_symbol,
+            "timeframe": scanner_timeframe,
+            "lookback": str(scanner_lookback),
+            "universe": scanner_universe,
+        }
+        scanner_query = urllib.parse.urlencode(scanner_params)
+        scanner_href = f"?{scanner_query}"
+        
+        st.markdown(
+            f"""
+            <div style="text-align: right; margin-bottom: 8px;">
+              <a href="{scanner_href}" target="_self" style="text-decoration: none;">
+                <button style="
+                    padding: 6px 12px;
+                    border-radius: 8px;
+                    border: 1px solid #444;
+                    background-color: #333;
+                    color: white;
+                    font-size: 14px;
+                    cursor: pointer;
+                ">
+                  ⬅ Back to Scanner
+                </button>
+              </a>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
     
     # =========================================================================
     # TASK D: Ensure Live Signal Loads Navigation State
     # =========================================================================
-    nav_symbol = st.session_state.get("live_symbol")
-    nav_timeframe = st.session_state.get("live_timeframe")
-    nav_lookback = st.session_state.get("live_lookback")
+    # With the new URL-based system, state is already loaded into st.session_state
+    # by the centralized logic at the top of the file.
+    # We just need to ensure we use those values.
+    
+    nav_symbol = st.session_state.get("symbol")
+    nav_timeframe = st.session_state.get("timeframe")
+    nav_lookback = st.session_state.get("lookback")
     
     # These will be used to set defaults below
-    # We don't delete them here because we want them to persist if user refreshes
-    # until they change them manually or navigate away
     
     # Session state for preset tracking
     if "live_preset" not in st.session_state:
