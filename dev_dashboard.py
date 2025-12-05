@@ -3632,6 +3632,12 @@ def render_market_scanner():
                                 "lookback": lookback,    # Current Market Scanner lookback
                             }
                             st.session_state["mode"] = "Live Signal"
+                            
+                            # Update URL params to prevent handle_url_params from reverting mode
+                            st.query_params["mode"] = "live_signal"
+                            st.query_params["symbol"] = symbol_name
+                            st.query_params["timeframe"] = timeframe
+                            
                             st.rerun()
         
         st.info("💡 Tip: Click a symbol button above to instantly open **Live Signal** with that ticker preloaded.")
