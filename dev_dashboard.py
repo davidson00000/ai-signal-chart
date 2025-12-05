@@ -3482,7 +3482,7 @@ def render_market_scanner():
             st.warning("No results found.")
             return
             
-        # Prepare table data
+        # Prepare table data for display
         table_data = []
         for res in results:
             signal = res.get("final_signal", "FLAT")
@@ -3497,7 +3497,6 @@ def render_market_scanner():
                 "Score": f"{res.get('combined_score', 0):.2f}",
                 "Rule": f"{res.get('rule_direction')} ({res.get('rule_score'):.2f})",
                 "Stat": f"{res.get('stat_direction')} ({res.get('stat_conf'):.2f})",
-                "Action": "Open Live Signal" # Placeholder for link
             })
             
         df = pd.DataFrame(table_data)
@@ -3518,7 +3517,45 @@ def render_market_scanner():
             
         st.dataframe(df.style.apply(highlight_signal, axis=1), use_container_width=True, hide_index=True)
         
-        st.info("💡 Tip: Copy a symbol and paste it into the **Live Signal** page to see detailed analysis with presets.")
+        # Navigation buttons for each symbol
+        st.markdown("---")
+        st.subheader("🔗 Quick Actions")
+        st.caption("Click a symbol to open it in Live Signal with current settings.")
+        
+        # Display buttons in grid (4 per row)
+        cols_per_row = 4
+        for i in range(0, len(results), cols_per_row):
+            cols = st.columns(cols_per_row)
+            for j, col in enumerate(cols):
+                if i + j < len(results):
+                    res = results[i + j]
+                    symbol_name = res.get("symbol")
+                    signal = res.get("final_signal", "FLAT")
+                    score = res.get("combined_score", 0)
+                    
+                    # Signal emoji
+                    signal_emoji = "➖"
+                    if "STRONG_UP" in signal: signal_emoji = "🟢"
+                    elif "UP" in signal: signal_emoji = "🔵"
+                    elif "STRONG_DOWN" in signal: signal_emoji = "🔴"
+                    elif "DOWN" in signal: signal_emoji = "🟠"
+                    
+                    with col:
+                        if st.button(
+                            f"{signal_emoji} {symbol_name} ({score:.1f})",
+                            key=f"nav_live_{symbol_name}",
+                            use_container_width=True
+                        ):
+                            # Store navigation data in session state
+                            st.session_state["nav_live_signal"] = {
+                                "symbol": symbol_name,
+                                "timeframe": timeframe,  # Current Market Scanner timeframe
+                                "lookback": lookback,    # Current Market Scanner lookback
+                            }
+                            st.session_state["mode"] = "Live Signal"
+                            st.rerun()
+        
+        st.info("💡 Tip: Click a symbol button above to instantly open **Live Signal** with that ticker preloaded.")
 
 
 # =============================================================================
@@ -3714,6 +3751,25 @@ def render_live_signal():
     st.title("📡 Live Signal (v1)")
     st.caption("Real-time trading signals based on EXITON v1 architecture.")
     
+    # =========================================================================
+    # TASK B: Handle navigation from Market Scanner
+    # =========================================================================
+    nav = st.session_state.get("nav_live_signal")
+    nav_symbol = None
+    nav_timeframe = None
+    nav_lookback = None
+    
+    if nav:
+        nav_symbol = nav.get("symbol")
+        nav_timeframe = nav.get("timeframe", "1d")
+        nav_lookback = nav.get("lookback", 200)
+        
+        # Show navigation confirmation
+        st.success(f"🔗 Navigated from Market Scanner: **{nav_symbol}** (Timeframe: {nav_timeframe}, Lookback: {nav_lookback})")
+        
+        # Clear navigation state after reading
+        del st.session_state["nav_live_signal"]
+    
     # Session state for preset tracking
     if "live_preset" not in st.session_state:
         st.session_state["live_preset"] = None
@@ -3727,10 +3783,15 @@ def render_live_signal():
     default_symbols = ["AAPL", "NVDA", "TSLA", "MSFT", "AMZN", "GOOGL", "META", "AMD", "INTC", "SMCI"]
     options = universe if universe else default_symbols
     
+    # Determine default symbol index (prioritize nav, then session state, then first)
+    default_symbol_index = 0
+    if nav_symbol and nav_symbol in options:
+        default_symbol_index = options.index(nav_symbol)
+    
     # Symbol selection (separate so we can detect changes)
     col_sym = st.columns([1, 3])[0]
     with col_sym:
-        symbol = st.selectbox("Symbol", options=options, index=0, key="live_symbol")
+        symbol = st.selectbox("Symbol", options=options, index=default_symbol_index, key="live_symbol")
     
     # Fetch preset when symbol changes
     if symbol != st.session_state["live_last_symbol"]:
@@ -3755,11 +3816,15 @@ def render_live_signal():
     preset_tf = preset.get("timeframe", "1d")
     preset_lookback = preset.get("lookback", 200)
     
+    # Navigation values override preset defaults
+    effective_tf = nav_timeframe if nav_timeframe else preset_tf
+    effective_lookback = nav_lookback if nav_lookback else preset_lookback
+    
     # Inputs
     col_in2, col_in3, col_btn = st.columns([1, 1, 1])
     with col_in2:
         tf_options = ["1d", "1h", "4h", "15m"]
-        tf_index = tf_options.index(preset_tf) if preset_tf in tf_options else 0
+        tf_index = tf_options.index(effective_tf) if effective_tf in tf_options else 0
         timeframe = st.selectbox("Timeframe", tf_options, index=tf_index, key="live_timeframe")
         
         # Check if modified
@@ -3767,7 +3832,7 @@ def render_live_signal():
             st.session_state["live_preset_modified"] = True
     
     with col_in3:
-        lookback = st.number_input("Lookback", min_value=50, max_value=500, value=preset_lookback, step=10, key="live_lookback")
+        lookback = st.number_input("Lookback", min_value=50, max_value=500, value=effective_lookback, step=10, key="live_lookback")
         
         # Check if modified
         if lookback != preset_lookback:
