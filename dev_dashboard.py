@@ -151,6 +151,39 @@ def handle_url_params():
     except Exception as e:
         print(f"Error parsing URL params: {e}")
 
+# ============================================================================
+# Navigation Helpers
+# ============================================================================
+
+def go_to_live_signal(symbol: str, timeframe: str = "1d", lookback: int = 200):
+    st.session_state["mode"] = "Live Signal"
+    
+    st.session_state["live_symbol"] = symbol
+    st.session_state["live_timeframe"] = timeframe
+    st.session_state["live_lookback"] = lookback
+    
+    # Sync URL
+    st.query_params["mode"] = "live_signal"
+    st.query_params["symbol"] = symbol
+    st.query_params["timeframe"] = timeframe
+    st.query_params["lookback"] = str(lookback)
+    
+    st.rerun()
+
+def go_to_scanner(universe: str = "default", timeframe: str = "1d", lookback: int = 200):
+    st.session_state["mode"] = "Market Scanner"
+    
+    st.session_state["scanner_universe"] = universe
+    st.session_state["scanner_timeframe"] = timeframe
+    st.session_state["scanner_lookback"] = lookback
+    
+    st.query_params["mode"] = "scanner"
+    st.query_params["universe"] = universe
+    st.query_params["timeframe"] = timeframe
+    st.query_params["lookback"] = str(lookback)
+    
+    st.rerun()
+
 # Call immediately on script load
 handle_url_params()
 
@@ -3620,25 +3653,17 @@ def render_market_scanner():
                     elif "DOWN" in signal: signal_emoji = "🟠"
                     
                     with col:
-                        if st.button(
+                        st.button(
                             f"{signal_emoji} {symbol_name} ({score:.1f})",
                             key=f"nav_live_{symbol_name}",
-                            use_container_width=True
-                        ):
-                            # Store navigation data in session state
-                            st.session_state["nav_live_signal"] = {
+                            use_container_width=True,
+                            on_click=go_to_live_signal,
+                            kwargs={
                                 "symbol": symbol_name,
-                                "timeframe": timeframe,  # Current Market Scanner timeframe
-                                "lookback": lookback,    # Current Market Scanner lookback
+                                "timeframe": timeframe,
+                                "lookback": lookback,
                             }
-                            st.session_state["mode"] = "Live Signal"
-                            
-                            # Update URL params to prevent handle_url_params from reverting mode
-                            st.query_params["mode"] = "live_signal"
-                            st.query_params["symbol"] = symbol_name
-                            st.query_params["timeframe"] = timeframe
-                            
-                            st.rerun()
+                        )
         
         st.info("💡 Tip: Click a symbol button above to instantly open **Live Signal** with that ticker preloaded.")
 
@@ -3841,28 +3866,22 @@ def render_live_signal():
         st.write("")
         st.write("")
         if st.button("⬅️ Back to Scanner", use_container_width=True):
-            st.session_state["mode"] = "Market Scanner"
-            st.query_params["mode"] = "scanner"
-            st.rerun()
+            go_to_scanner(
+                universe=st.session_state.get("scanner_universe", "default"),
+                timeframe=st.session_state.get("scanner_timeframe", "1d"),
+                lookback=st.session_state.get("scanner_lookback", 200),
+            )
     
     # =========================================================================
-    # TASK B: Handle navigation from Market Scanner
+    # TASK D: Ensure Live Signal Loads Navigation State
     # =========================================================================
-    nav = st.session_state.get("nav_live_signal")
-    nav_symbol = None
-    nav_timeframe = None
-    nav_lookback = None
+    nav_symbol = st.session_state.get("live_symbol")
+    nav_timeframe = st.session_state.get("live_timeframe")
+    nav_lookback = st.session_state.get("live_lookback")
     
-    if nav:
-        nav_symbol = nav.get("symbol")
-        nav_timeframe = nav.get("timeframe", "1d")
-        nav_lookback = nav.get("lookback", 200)
-        
-        # Show navigation confirmation
-        st.success(f"🔗 Navigated from Market Scanner: **{nav_symbol}** (Timeframe: {nav_timeframe}, Lookback: {nav_lookback})")
-        
-        # Clear navigation state after reading
-        del st.session_state["nav_live_signal"]
+    # These will be used to set defaults below
+    # We don't delete them here because we want them to persist if user refreshes
+    # until they change them manually or navigate away
     
     # Session state for preset tracking
     if "live_preset" not in st.session_state:
