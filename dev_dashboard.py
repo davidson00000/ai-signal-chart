@@ -4344,6 +4344,91 @@ def render_live_signal():
             except Exception:
                 pass
 
+            # =================================================================
+            # Paper Account Summary
+            # =================================================================
+            st.markdown("---")
+            try:
+                acct_resp = requests.get(f"{BACKEND_URL}/paper/accounts/default", timeout=5)
+                if acct_resp.status_code == 200:
+                    acct = acct_resp.json()
+                    equity = acct.get("equity", 0.0)
+                    cash = acct.get("cash", 0.0)
+                    open_risk = acct.get("open_risk", 0.0)
+                    risk_pct = (open_risk / equity) if equity > 0 else 0.0
+                    
+                    st.markdown("### 📊 Paper Account Summary")
+                    cols = st.columns(4)
+                    cols[0].metric("Equity", f"${equity:,.2f}")
+                    cols[1].metric("Cash", f"${cash:,.2f}")
+                    cols[2].metric("Open Risk", f"${open_risk:,.2f}")
+                    cols[3].metric("Risk %", f"{risk_pct*100:.1f}%")
+                elif acct_resp.status_code == 404:
+                    st.caption("📊 No paper account yet. Open a position to create one.")
+            except Exception as e:
+                st.warning(f"Could not fetch paper account: {e}")
+
+            # =================================================================
+            # Paper Trading Performance Summary (All Trades)
+            # =================================================================
+            try:
+                perf_resp = requests.get(f"{BACKEND_URL}/paper/trades", params={"account_id": "default"}, timeout=5)
+                if perf_resp.status_code == 200:
+                    all_trades = perf_resp.json()
+                    
+                    if all_trades:
+                        st.markdown("### 📈 Paper Trading Performance")
+                        
+                        # Compute stats
+                        total_trades = len(all_trades)
+                        r_values = [t.get("r_multiple", 0.0) for t in all_trades]
+                        wins = sum(1 for r in r_values if r > 0)
+                        losses = total_trades - wins
+                        win_rate = wins / total_trades if total_trades > 0 else 0.0
+                        avg_r = sum(r_values) / total_trades if total_trades > 0 else 0.0
+                        total_r = sum(r_values)
+                        best_r = max(r_values) if r_values else 0.0
+                        worst_r = min(r_values) if r_values else 0.0
+                        
+                        # Summary line
+                        st.write(
+                            f"**Total Trades:** {total_trades}  |  "
+                            f"**Win Rate:** {win_rate*100:.1f}%  |  "
+                            f"**Avg R:** {avg_r:.2f}  |  "
+                            f"**Total R:** {total_r:.2f}"
+                        )
+                        st.write(
+                            f"**Best R:** {best_r:.2f}  |  "
+                            f"**Worst R:** {worst_r:.2f}"
+                        )
+                        
+                        # Full trade history table
+                        all_trades.sort(key=lambda x: x.get("closed_at") or "", reverse=True)
+                        
+                        perf_data = []
+                        for t in all_trades:
+                            perf_data.append({
+                                "Symbol": t.get("symbol", ""),
+                                "Dir": t.get("direction", ""),
+                                "Entry": t.get("entry_price", 0.0),
+                                "Exit": t.get("exit_price", 0.0),
+                                "R": t.get("r_multiple", 0.0),
+                                "PnL ($)": t.get("net_pnl", 0.0),
+                                "Closed": t.get("closed_at", "")[:16].replace("T", " ") if t.get("closed_at") else ""
+                            })
+                        
+                        st.dataframe(
+                            perf_data,
+                            use_container_width=True,
+                            column_config={
+                                "PnL ($)": st.column_config.NumberColumn(format="$%.2f"),
+                                "R": st.column_config.NumberColumn(format="%.2fR"),
+                            }
+                        )
+                    else:
+                        st.caption("📈 No closed paper trades yet.")
+            except Exception as e:
+                st.warning(f"Could not fetch paper trades: {e}")
 
         st.markdown("---")
         
