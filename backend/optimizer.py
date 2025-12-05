@@ -126,7 +126,9 @@ class GridSearchOptimizer:
         if "time" not in df.columns:
             raise ValueError("Data must contain 'time' column")
         
-        df = df.set_index(pd.to_datetime(df["time"], unit="s"))
+        # Set datetime index and drop original time column to avoid conflict
+        df.index = pd.to_datetime(df["time"], unit="s")
+        df = df.drop(columns=["time"])
         
         # Generate parameter combinations
         param_names = list(param_grid.keys())
@@ -192,7 +194,7 @@ class GridSearchOptimizer:
                 results.append(opt_res)
                 
             except Exception as e:
-                # print(f"Error optimizing {combo}: {e}")
+                # Silently skip failed combinations
                 continue
                 
         # Sort by Score (Descending)

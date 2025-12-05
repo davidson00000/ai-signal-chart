@@ -97,9 +97,155 @@ from backend.strategies import (
     MACrossStrategy, EMACrossStrategy, MACDTrendStrategy,
     RSIMeanReversionStrategy, StochasticOscillatorStrategy,
     BollingerMeanReversionStrategy, BollingerBreakoutStrategy,
-    DonchianBreakoutStrategy, ATRTrailingMAStrategy, ROCMomentumStrategy
+    DonchianBreakoutStrategy, ATRTrailingMAStrategy, ROCMomentumStrategy,
+    EMA9DipBuyStrategy
 )
 
+# ============================================================================
+# Helpers
+# ============================================================================
+
+def render_predictor_card(title, pred):
+    direction = pred.get("direction", "flat").upper()
+    score = pred.get("score", 0.0)
+    prob_up = pred.get("prob_up")
+    prob_down = pred.get("prob_down")
+    signals = pred.get("signals") or pred.get("details") # Handle both keys just in case
+    
+    # Icons & Colors
+    icon = "➖"
+    color_hex = "#7f8c8d" # Gray
+    if direction == "UP": 
+        icon = "📈"
+        color_hex = "#2ecc71" # Green
+    elif direction == "DOWN": 
+        icon = "📉"
+        color_hex = "#e74c3c" # Red
+    
+    # Probability Bars
+    bars_html = ""
+    if prob_up is not None and prob_down is not None:
+        bars_html = f"""
+<div style="margin-top: 10px; font-size: 12px; color: #ccc;">
+    <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+        <span>Prob Up: {prob_up:.2f}</span>
+        <span>Prob Down: {prob_down:.2f}</span>
+    </div>
+    <div style="display: flex; height: 6px; width: 100%; border-radius: 3px; overflow: hidden; background: #444;">
+        <div style="width: {prob_up*100}%; background-color: #2ecc71;"></div>
+        <div style="width: {prob_down*100}%; background-color: #e74c3c;"></div>
+    </div>
+</div>
+"""
+    else:
+        # Fallback to single score bar
+        bars_html = f"""
+<div style="width: 100%; background-color: #444; height: 6px; border-radius: 3px; margin-top: 10px;">
+    <div style="width: {abs(score)*100}%; background-color: {color_hex}; height: 6px; border-radius: 3px;"></div>
+</div>
+"""
+
+    # Signals Breakdown (for Rule Predictor v2)
+    signals_html = ""
+    if signals:
+        raw_signals = pred.get("raw_signals") or {}
+        rows = ""
+        for k, v in signals.items():
+            s_color = "#7f8c8d"
+            s_icon = "•"
+            if v == 1: s_color = "#2ecc71"; s_icon = "▲"
+            elif v == -1: s_color = "#e74c3c"; s_icon = "▼"
+            
+            # Tooltip content (continuous value)
+            raw_val = raw_signals.get(k, 0.0)
+            tooltip = f"{k.upper()}: {raw_val:.2f}"
+            
+            rows += f"""
+<div style="display: flex; flex-direction: column; align-items: center; margin: 0 5px;" title="{tooltip}">
+    <span style="font-size: 10px; color: #aaa;">{k.upper()}</span>
+    <span style="font-size: 14px; color: {s_color}; font-weight: bold; cursor: help;">{s_icon}</span>
+</div>
+"""
+        signals_html = f"""
+<div style="margin-top: 15px; padding-top: 10px; border-top: 1px solid rgba(255,255,255,0.1); display: flex; justify-content: center;">
+    {rows}
+</div>
+"""
+
+    # Card Style
+    st.markdown(
+        f"""
+<div style="
+    padding: 15px; 
+    border-radius: 10px; 
+    background: linear-gradient(135deg, rgba(255,255,255,0.05) 0%, rgba(255,255,255,0.02) 100%); 
+    border: 1px solid rgba(255,255,255,0.1);
+    margin-bottom: 10px;
+">
+    <h4 style="margin:0; color: #aaa; font-size: 14px;">{title}</h4>
+    <div style="display: flex; align-items: center; justify-content: space-between; margin-top: 10px;">
+        <span style="font-size: 24px;">{icon} {direction}</span>
+        <span style="font-size: 18px; font-weight: bold; color: {color_hex};">{score:.2f}</span>
+    </div>
+    {bars_html}
+    {signals_html}
+</div>
+""",
+        unsafe_allow_html=True
+    )
+
+def render_timeframe_guidance(current_timeframe: str, mode: str = "live_signal"):
+    """
+    Render timeframe guidance for swing trading.
+    mode: "live_signal" or "dashboard"
+    """
+    is_recommended = (current_timeframe == "1d")
+    
+    if mode == "live_signal":
+        # Guidance box
+        st.markdown("""
+<div style="
+    background: linear-gradient(135deg, rgba(52, 152, 219, 0.1) 0%, rgba(52, 152, 219, 0.05) 100%);
+    border: 1px solid rgba(52, 152, 219, 0.3);
+    border-radius: 8px;
+    padding: 12px 16px;
+    margin-bottom: 15px;
+">
+    <div style="font-weight: 600; color: #3498db; margin-bottom: 8px;">
+        📊 Recommended Timeframe (Swing Trading)
+    </div>
+    <div style="font-size: 13px; color: #bbb; line-height: 1.5;">
+        <strong>Primary:</strong> 1d (daily) — for direction & signals<br>
+        <strong>Secondary:</strong> 4h — for entry/exit fine-tuning
+    </div>
+</div>
+""", unsafe_allow_html=True)
+        
+        # Timeframe hint based on selection
+        if is_recommended:
+            st.success("✅ **1d (Daily)** is the recommended timeframe for swing trading.")
+        elif current_timeframe == "4h":
+            st.info("ℹ️ **4h** is useful for entry/exit timing. Use with 1d for direction.")
+        else:
+            st.warning(f"⚠️ **{current_timeframe}** may be noisy for swing trading. Consider using **1d** for primary signals.")
+    
+    elif mode == "dashboard":
+        # Compact tooltip-style hint for dashboard
+        st.markdown("""
+<div style="
+    background: rgba(52, 152, 219, 0.08);
+    border-left: 3px solid #3498db;
+    padding: 8px 12px;
+    margin-top: 10px;
+    font-size: 12px;
+    color: #aaa;
+    border-radius: 0 4px 4px 0;
+">
+    <span style="color: #3498db; font-weight: 600;">ℹ️ Note:</span> 
+    Rule Predictor v2 is optimized for <strong>daily (1d)</strong> candles and 
+    <strong>swing trades</strong> (few days ~ few weeks). Intraday signals may be noisier.
+</div>
+""", unsafe_allow_html=True)
 
 def apply_preset_callback(preset_params, strategy_type):
     """Callback to apply preset parameters to session state"""
@@ -850,32 +996,8 @@ Comparing multiple strategies with the same symbol, timeframe, and date range.
                             best_return = df_comparison.loc[best_idx, "Return (%)"]
                             st.success(f"🏆 Best Performer: **{best_name}** with {best_return}% return")
                             # Best Parameters
-                        best_res = top_results[0]
-                        st.info(f"**Best Parameters (Composite Score)**: Short={best_res['short']}, Long={best_res['long']} (Score: {best_res.get('score', 0):.2f})")
-                        
-                        # Heatmap Data Preparation
-                        # We need a pivot table of Short vs Long with Score as value
-                        df_opt = pd.DataFrame(top_results)
-                        
-                        # Ensure we have data for heatmap
-                        if not df_opt.empty:
-                            heatmap_data = df_opt.pivot_table(
-                                index="short", 
-                                columns="long", 
-                                values="score",
-                                aggfunc="max" # In case of duplicates, take max score
-                            )
-                            
-                            st.subheader("Parameter Heatmap (Score)")
-                            st.write("Score = Sharpe * 2.0 + Return * 0.5 (Penalties for low trades/high DD)")
-                            
-                            fig, ax = plt.subplots(figsize=(10, 8))
-                            sns.heatmap(heatmap_data, annot=True, fmt=".1f", cmap="RdYlGn", ax=ax)
-                            st.pyplot(fig)
-                        
-                        # Top Results Table
-                        st.subheader("Top Results (Sorted by Score)")
-                        st.dataframe(df_opt[["short", "long", "score", "return_pct", "sharpe", "max_dd", "trades"]], use_container_width=True)
+                            # NOTE: Removed old top_results-based UI here.
+                            # Strategy comparison now only uses df_comparison / best_idx.
                         # Equity Curve Overlay Chart
                         st.markdown("##### Equity Curve Comparison")
                         
@@ -890,26 +1012,26 @@ Comparing multiple strategies with the same symbol, timeframe, and date range.
                                     "strategy": cr["name"]
                                 })
                             
-                            if equity_data:
-                                # import altair as alt (Moved to global scope)
-                                
-                                df_equity = pd.DataFrame(equity_data)
-                                df_equity['date'] = pd.to_datetime(df_equity['date'])
-                                
-                                # Create Altair chart
-                                chart = alt.Chart(df_equity).mark_line().encode(
-                                    x=alt.X('date:T', title='Date'),
-                                    y=alt.Y('equity:Q', title='Equity'),
-                                    color=alt.Color('strategy:N', title='Strategy'),
-                                    tooltip=['date:T', 'equity:Q', 'strategy:N']
-                                ).properties(
-                                    height=400,
-                                    title='Equity Curve Comparison'
-                                ).interactive()
-                                
-                                st.altair_chart(chart, use_container_width=True)
-                            else:
-                                st.warning("No equity curve data available for comparison.")
+                        if equity_data:
+                            # import altair as alt (Moved to global scope)
+                            
+                            df_equity = pd.DataFrame(equity_data)
+                            df_equity['date'] = pd.to_datetime(df_equity['date'])
+                            
+                            # Create Altair chart
+                            chart = alt.Chart(df_equity).mark_line().encode(
+                                x=alt.X('date:T', title='Date'),
+                                y=alt.Y('equity:Q', title='Equity', scale=alt.Scale(zero=False)),
+                                color=alt.Color('strategy:N', title='Strategy'),
+                                tooltip=['strategy', 'date:T', 'equity:Q']
+                            ).properties(
+                                height=400,
+                                title='Equity Curve Comparison'
+                            ).interactive()
+                            
+                            st.altair_chart(chart, use_container_width=True)
+                        else:
+                            st.warning("No equity curve data available for comparison.")
     
     st.markdown("---")
     
@@ -956,26 +1078,133 @@ Comparing multiple strategies with the same symbol, timeframe, and date range.
                 m3.metric("Max Drawdown", f"{metrics['max_drawdown'] * 100:.2f}%")
                 m4.metric("Trades", metrics["trade_count"])
 
-                # Equity Curve
-                st.subheader("Equity Curve")
-                equity_data = result["equity_curve"]
+                # Prepare Data
+                price_series = result.get("price_series", [])
+                equity_data = result.get("equity_curve", [])
+                trades_data = result.get("trades", [])
+
+                # --- Results (Vertical Layout) ---
+                
+                # 1. Price & Signals
+                st.markdown("#### 📈 Price History & Trade Signals")
+                
+                price_chart = None
+                equity_chart = None
+                
+                if price_series:
+                    df_price = pd.DataFrame(price_series)
+                    df_price["date"] = pd.to_datetime(df_price["date"])
+                    
+                    # Clean numeric cols
+                    for col in ["close", "open", "high", "low"]:
+                        if col in df_price.columns:
+                            df_price[col] = pd.to_numeric(df_price[col], errors='coerce')
+                    
+                    # Drop rows with missing essential data
+                    df_price = df_price.dropna(subset=["date", "close"])
+
+                    # Base Chart
+                    base = alt.Chart(df_price).encode(x=alt.X('date:T', title="Date"))
+                    
+                    # Dynamic Tooltip
+                    tooltip_cols = ['date:T', 'close']
+                    for col in ['open', 'high', 'low']:
+                        if col in df_price.columns and df_price[col].notna().any():
+                            tooltip_cols.append(col)
+
+                    # Price Line
+                    line = base.mark_line(color='#29b5e8').encode(
+                        y=alt.Y('close:Q', title="Price", scale=alt.Scale(zero=False)),
+                        tooltip=tooltip_cols
+                    )
+                    
+                    layers = [line]
+                    
+                    # Add MA if available (optional, but good if present)
+                    if "ma_short" in df_price.columns:
+                        layers.append(base.mark_line(color='orange', opacity=0.8).encode(y='ma_short:Q', tooltip=['date:T', 'ma_short']))
+                    if "ma_long" in df_price.columns:
+                        layers.append(base.mark_line(color='blue', opacity=0.8).encode(y='ma_long:Q', tooltip=['date:T', 'ma_long']))
+
+                    # Add Signals
+                    if trades_data:
+                        df_trades = pd.DataFrame(trades_data)
+                        if "date" in df_trades.columns:
+                            df_trades["date"] = pd.to_datetime(df_trades["date"])
+                            
+                            # Buy Signals
+                            buys = df_trades[df_trades["side"] == "BUY"]
+                            if not buys.empty:
+                                buy_chart = alt.Chart(buys).mark_point(
+                                    shape="triangle-up", filled=True, size=100, color="green"
+                                ).encode(
+                                    x="date:T",
+                                    y="price:Q",
+                                    tooltip=["date:T", "side", "price", "quantity"]
+                                )
+                                layers.append(buy_chart)
+                            
+                            # Sell Signals
+                            sells = df_trades[df_trades["side"] == "SELL"]
+                            if not sells.empty:
+                                sell_chart = alt.Chart(sells).mark_point(
+                                    shape="triangle-down", filled=True, size=100, color="red"
+                                ).encode(
+                                    x="date:T",
+                                    y="price:Q",
+                                    tooltip=["date:T", "side", "price", "quantity"]
+                                )
+                                layers.append(sell_chart)
+                    
+                    # Create Price Chart (not interactive yet)
+                    price_chart = alt.layer(*layers).properties(
+                        height=400,
+                        title="Price History & Trade Signals"
+                    )
+                else:
+                    st.warning("No price data available.")
+
+                # 2. Equity Curve
+                st.markdown("#### 💰 Equity Curve")
                 if equity_data:
                     df_equity = pd.DataFrame(equity_data)
                     df_equity["date"] = pd.to_datetime(df_equity["date"])
-                    df_equity.set_index("date", inplace=True)
-                    st.line_chart(df_equity["equity"])
+                    df_equity["equity"] = pd.to_numeric(df_equity["equity"], errors='coerce')
+                    
+                    equity_chart = alt.Chart(df_equity).mark_line(color='#29b5e8').encode(
+                        x=alt.X('date:T', title="Date"),
+                        y=alt.Y('equity:Q', title="Equity", scale=alt.Scale(zero=False)),
+                        tooltip=['date:T', 'equity']
+                    ).properties(
+                        height=250,
+                        title="Equity Curve"
+                    )
                 else:
-                    st.warning("No equity data returned.")
+                    st.warning("No equity data available.")
+                
+                # Combine Charts
+                if price_chart and equity_chart:
+                    combined_chart = alt.vconcat(
+                        price_chart,
+                        equity_chart
+                    ).resolve_scale(
+                        x='shared'
+                    ).interactive()
+                    
+                    st.altair_chart(combined_chart, use_container_width=True)
+                elif price_chart:
+                    st.altair_chart(price_chart.interactive(), use_container_width=True)
+                elif equity_chart:
+                    st.altair_chart(equity_chart.interactive(), use_container_width=True)
 
-                # Trades Table
-                st.subheader("Trade History")
-                trades_data = result["trades"]
+                # 3. Trade History
+                st.markdown("#### 📜 Trade History")
                 if trades_data:
-                    df_trades = pd.DataFrame(trades_data)
-                    st.dataframe(df_trades, use_container_width=True)
-
+                    df_trades_hist = pd.DataFrame(trades_data)
+                    st.dataframe(df_trades_hist, use_container_width=True)
+                    
                     # CSV Download
-                    csv = df_trades.to_csv(index=False).encode('utf-8')
+                    csv = df_trades_hist.to_csv(index=False).encode('utf-8')
                     st.download_button(
                         label="📥 Download Trades CSV",
                         data=csv,
@@ -1259,143 +1488,139 @@ def render_single_analysis_section():
                 col3.metric("Max Drawdown", f"{metrics.get('max_drawdown', 0)*100:.2f}%")
                 col4.metric("Trades", metrics.get('trade_count', 0))
                 
-                # Prepare shared x-axis domain
+                # Prepare Data
                 price_series = result.get("price_series", [])
                 equity_data = result.get("equity_curve", [])
+                trades_data = result.get("trades", [])
                 
-                domain = None
+                # --- Results (Vertical Layout) ---
+                
+                # 1. Price & Signals
+                st.markdown("#### 📈 Price History & Trade Signals")
+                
+                price_chart = None
+                equity_chart = None
+                
                 if price_series:
                     df_price = pd.DataFrame(price_series)
                     df_price["date"] = pd.to_datetime(df_price["date"])
                     
-                    # FIX: Clean data to avoid Altair warnings
-                    numeric_cols = ["close", "ma_short", "ma_long"]
-                    for col in numeric_cols:
+                    # Clean numeric cols
+                    for col in ["close", "open", "high", "low"]:
                         if col in df_price.columns:
                             df_price[col] = pd.to_numeric(df_price[col], errors='coerce')
-                    df_price = df_price.dropna(subset=["date"])
                     
-                    min_date = df_price["date"].min()
-                    max_date = df_price["date"].max()
-                    domain = [min_date, max_date]
-                
-                # --- Build Equity Chart ---
-                equity_chart = None
-                if equity_data:
-                    df_equity = pd.DataFrame(equity_data)
-                    if "date" in df_equity.columns:
-                        df_equity["date"] = pd.to_datetime(df_equity["date"])
+                    # Drop rows with missing essential data
+                    df_price = df_price.dropna(subset=["date", "close"])
+
+                    # Base Chart
+                    base = alt.Chart(df_price).encode(x=alt.X('date:T', title="Date"))
                     
-                    # FIX: Clean equity data
-                    if "equity" in df_equity.columns:
-                        df_equity["equity"] = pd.to_numeric(df_equity["equity"], errors='coerce')
-                        df_equity = df_equity.dropna(subset=["date", "equity"])
-                    
-                    equity_chart = alt.Chart(df_equity).mark_line(color='#29b5e8').encode(
-                        x=alt.X('date:T', title=None, axis=alt.Axis(labels=False)), # Hide x-axis labels for top chart
-                        y=alt.Y('equity:Q', title="Equity", scale=alt.Scale(zero=False)),
-                        tooltip=['date', 'equity']
-                    ).properties(
-                        height=200,
-                        title="Equity Curve"
-                    )
-                else:
-                    st.warning("No equity data returned.")
-                
-                # --- Build Price & Signals Chart ---
-                price_chart = None
-                trades_data = result.get("trades", [])
-                
-                if price_series:
-                    # Base chart
-                    base = alt.Chart(df_price).encode(
-                        x=alt.X('date:T', title="Date")
-                    )
-                    
+                    # Dynamic Tooltip
+                    tooltip_cols = ['date:T', 'close']
+                    for col in ['open', 'high', 'low']:
+                        if col in df_price.columns and df_price[col].notna().any():
+                            tooltip_cols.append(col)
+
                     # Price Line
-                    line = base.mark_line(color='gray', opacity=0.5).encode(y=alt.Y('close:Q', title="Price", scale=alt.Scale(zero=False)))
+                    line = base.mark_line(color='#29b5e8').encode(
+                        y=alt.Y('close:Q', title="Price", scale=alt.Scale(zero=False)),
+                        tooltip=tooltip_cols
+                    )
                     
-                    # Indicators (MA)
                     layers = [line]
-                    if "ma_short" in df_price.columns:
-                        ma_short = base.mark_line(color='orange').encode(y='ma_short:Q')
-                        layers.append(ma_short)
-                    if "ma_long" in df_price.columns:
-                        ma_long = base.mark_line(color='blue').encode(y='ma_long:Q')
-                        layers.append(ma_long)
                     
-                    # Trade Signals
+                    # Add MA if available (optional, but good if present)
+                    if "ma_short" in df_price.columns:
+                        layers.append(base.mark_line(color='orange', opacity=0.8).encode(y='ma_short:Q', tooltip=['date:T', 'ma_short']))
+                    if "ma_long" in df_price.columns:
+                        layers.append(base.mark_line(color='blue', opacity=0.8).encode(y='ma_long:Q', tooltip=['date:T', 'ma_long']))
+
+                    # Add Signals
                     if trades_data:
                         df_trades = pd.DataFrame(trades_data)
-                        
-                        # Schema Detection
-                        has_entry_exit = {"entry_date", "entry_price", "exit_date", "exit_price"}.issubset(df_trades.columns)
-                        has_simple_side = {"date", "side", "price"}.issubset(df_trades.columns)
-                        
-                        if has_entry_exit:
-                            df_trades["entry_date"] = pd.to_datetime(df_trades["entry_date"])
-                            df_trades["exit_date"] = pd.to_datetime(df_trades["exit_date"])
-                            
-                            # Buy Signals (Entry)
-                            buy_signals = alt.Chart(df_trades).mark_point(shape='triangle-up', color='green', size=100, filled=True).encode(
-                                x='entry_date:T',
-                                y='entry_price:Q',
-                                tooltip=['entry_date', 'entry_price', 'type'] if 'type' in df_trades.columns else ['entry_date', 'entry_price']
-                            )
-                            layers.append(buy_signals)
-                            
-                            # Sell Signals (Exit)
-                            sell_signals = alt.Chart(df_trades).mark_point(shape='triangle-down', color='red', size=100, filled=True).encode(
-                                x='exit_date:T',
-                                y='exit_price:Q',
-                                tooltip=['exit_date', 'exit_price', 'pnl', 'pnl_pct'] if 'pnl' in df_trades.columns else ['exit_date', 'exit_price']
-                            )
-                            layers.append(sell_signals)
-                            
-                        elif has_simple_side:
+                        if "date" in df_trades.columns:
                             df_trades["date"] = pd.to_datetime(df_trades["date"])
                             
                             # Buy Signals
-                            buy_df = df_trades[df_trades["side"] == "BUY"]
-                            if not buy_df.empty:
-                                buy_signals = alt.Chart(buy_df).mark_point(shape='triangle-up', color='green', size=100, filled=True).encode(
-                                    x='date:T',
-                                    y='price:Q',
-                                    tooltip=['date', 'price', 'quantity']
+                            buys = df_trades[df_trades["side"] == "BUY"]
+                            if not buys.empty:
+                                buy_chart = alt.Chart(buys).mark_point(
+                                    shape="triangle-up", filled=True, size=100, color="green"
+                                ).encode(
+                                    x="date:T",
+                                    y="price:Q",
+                                    tooltip=["date:T", "side", "price", "quantity"]
                                 )
-                                layers.append(buy_signals)
+                                layers.append(buy_chart)
                             
                             # Sell Signals
-                            sell_df = df_trades[df_trades["side"] == "SELL"]
-                            if not sell_df.empty:
-                                sell_signals = alt.Chart(sell_df).mark_point(shape='triangle-down', color='red', size=100, filled=True).encode(
-                                    x='date:T',
-                                    y='price:Q',
-                                    tooltip=['date', 'price', 'pnl']
+                            sells = df_trades[df_trades["side"] == "SELL"]
+                            if not sells.empty:
+                                sell_chart = alt.Chart(sells).mark_point(
+                                    shape="triangle-down", filled=True, size=100, color="red"
+                                ).encode(
+                                    x="date:T",
+                                    y="price:Q",
+                                    tooltip=["date:T", "side", "price", "quantity"]
                                 )
-                                layers.append(sell_signals)
+                                layers.append(sell_chart)
                     
-                    price_chart = alt.layer(*layers).properties(height=400, title="Price & Signals")
-
-                # --- Combine and Render ---
-                if equity_chart and price_chart:
-                    # FIX: Use vconcat with resolve_scale(x='shared') AND .interactive() on the combined chart
-                    combined = (
-                        alt.vconcat(equity_chart, price_chart)
-                        .resolve_scale(x='shared')
-                        .interactive()
+                    # Create Price Chart (not interactive yet)
+                    price_chart = alt.layer(*layers).properties(
+                        height=400,
+                        title="Price History & Trade Signals"
                     )
-                    st.altair_chart(combined, use_container_width=True)
+                else:
+                    st.warning("No price data available.")
+
+                # 2. Equity Curve
+                st.markdown("#### 💰 Equity Curve")
+                if equity_data:
+                    df_equity = pd.DataFrame(equity_data)
+                    df_equity["date"] = pd.to_datetime(df_equity["date"])
+                    df_equity["equity"] = pd.to_numeric(df_equity["equity"], errors='coerce')
+                    
+                    equity_chart = alt.Chart(df_equity).mark_line(color='#29b5e8').encode(
+                        x=alt.X('date:T', title="Date"),
+                        y=alt.Y('equity:Q', title="Equity", scale=alt.Scale(zero=False)),
+                        tooltip=['date:T', 'equity']
+                    ).properties(
+                        height=250,
+                        title="Equity Curve"
+                    )
+                else:
+                    st.warning("No equity data available.")
+                
+                # Combine Charts
+                if price_chart and equity_chart:
+                    combined_chart = alt.vconcat(
+                        price_chart,
+                        equity_chart
+                    ).resolve_scale(
+                        x='shared'
+                    ).interactive()
+                    
+                    st.altair_chart(combined_chart, use_container_width=True)
                 elif price_chart:
                     st.altair_chart(price_chart.interactive(), use_container_width=True)
                 elif equity_chart:
                     st.altair_chart(equity_chart.interactive(), use_container_width=True)
 
-                # Trade History
-                st.subheader("Trade History")
+                # --- Tab 3: Trade History ---
+                st.markdown("#### 📜 Trade History")
                 if trades_data:
-                    df_trades = pd.DataFrame(trades_data)
-                    st.dataframe(df_trades, use_container_width=True)
+                    df_trades_hist = pd.DataFrame(trades_data)
+                    st.dataframe(df_trades_hist, use_container_width=True)
+                    
+                    # CSV Download
+                    csv = df_trades_hist.to_csv(index=False).encode('utf-8')
+                    st.download_button(
+                        label="📥 Download Trades CSV",
+                        data=csv,
+                        file_name=f"strategy_trades_{symbol}.csv",
+                        mime="text/csv",
+                    )
                 else:
                     st.info("No trades executed.")
                 
@@ -1523,7 +1748,8 @@ def render_parameter_optimization_section():
                 }
                 
                 # Call backend
-                response = requests.post("http://localhost:8000/optimize/generic", json=payload)
+                # Use BACKEND_URL instead of hardcoded localhost:8000
+                response = requests.post(f"{BACKEND_URL}/optimize/generic", json=payload, timeout=300)
                 response.raise_for_status()
                 results = response.json()
                 
@@ -2570,6 +2796,72 @@ def _old_strategy_lab_code():
                 else:
                     st.info("No results match the current filters.")
 
+                # Anti Summary: Restored Equity Curve by re-simulating top 5 results to get equity data (missing in optimization response).
+                # --- Equity Curve Comparison (Top 5) ---
+                if not df_filtered.empty:
+                    st.markdown("##### Equity Curve Comparison (Top 5)")
+                    
+                    with st.spinner("Fetching equity curves for top results..."):
+                        equity_data = []
+                        top_5 = df_filtered.head(5)
+                        
+                        for idx, row in top_5.iterrows():
+                            # Re-run backtest to get equity curve
+                            s_params = {
+                                "short_window": int(row["short_window"]),
+                                "long_window": int(row["long_window"])
+                            }
+                            
+                            payload = {
+                                "symbol": symbol,
+                                "timeframe": timeframe,
+                                "start_date": start_date.isoformat(),
+                                "end_date": end_date.isoformat(),
+                                "initial_capital": initial_capital,
+                                "commission": commission,
+                                "strategy": "ma_cross",
+                                "params": s_params
+                            }
+                            
+                            try:
+                                # Use the simulation endpoint which returns full details including equity curve
+                                res = requests.post(f"{BACKEND_URL}/simulate", json=payload, timeout=10)
+                                if res.status_code == 200:
+                                    bk_data = res.json()
+                                    curve = bk_data.get("equity_curve", [])
+                                    
+                                    # Downsample if too large for plotting performance
+                                    if len(curve) > 1000:
+                                        step = len(curve) // 1000
+                                        curve = curve[::step]
+                                    
+                                    for point in curve:
+                                        equity_data.append({
+                                            "date": point["date"],
+                                            "equity": point["equity"],
+                                            "strategy": f"S:{int(row['short_window'])}/L:{int(row['long_window'])}"
+                                        })
+                            except Exception:
+                                pass # Skip if failed
+                        
+                        if equity_data:
+                            df_equity = pd.DataFrame(equity_data)
+                            df_equity['date'] = pd.to_datetime(df_equity['date'])
+                            
+                            chart = alt.Chart(df_equity).mark_line().encode(
+                                x=alt.X('date:T', title='Date'),
+                                y=alt.Y('equity:Q', title='Equity'),
+                                color=alt.Color('strategy:N', title='Config'),
+                                tooltip=['date:T', 'equity:Q', 'strategy:N']
+                            ).properties(
+                                height=400,
+                                title='Top 5 Strategies Equity Curve'
+                            ).interactive()
+                            
+                            st.altair_chart(chart, use_container_width=True)
+                        else:
+                            st.warning("Could not load equity curves.")
+
                         
                 # Save Strategy Logic
                 if not df_filtered.empty:
@@ -3010,7 +3302,7 @@ def main():
     # Sidebar mode switch
     mode = st.sidebar.selectbox(
         "Mode",
-        options=["Developer Dashboard", "Backtest Lab", "Strategy Lab", "Live Signal"],
+        options=["Developer Dashboard", "Backtest Lab", "Strategy Lab", "Live Signal", "Predictor Backtest Lab", "Market Scanner"],
         index=0,
     )
     
@@ -3053,6 +3345,39 @@ def main():
 
         # Main content area - 2 columns
         col1, col2 = st.columns([2, 1])
+        
+        with col1:
+             # Rule Predictor v2 Section
+             st.markdown("### 🔮 Rule Predictor v2")
+             with st.expander("Show Rule Predictor v2 Details", expanded=True):
+                 try:
+                     # Call Backend
+                     resp = requests.get(f"{BACKEND_URL}/rule_predictor_v2?symbol={symbol}")
+                     if resp.status_code == 200:
+                         data = resp.json()
+                         
+                         # Construct pred object for render_predictor_card
+                         pred = {
+                             "score": data["score"],
+                             "prob_up": data["prob_up"],
+                             "prob_down": data["prob_down"],
+                             "signals": data["signals"],
+                             "raw_signals": data.get("raw_signals"),
+                             "direction": "flat"
+                         }
+                         
+                         # Calculate direction
+                         if pred["prob_up"] > 0.55: pred["direction"] = "UP"
+                         elif pred["prob_down"] > 0.55: pred["direction"] = "DOWN"
+                         
+                         render_predictor_card("Rule Predictor v2", pred)
+                         
+                         # Timeframe Guidance for Dashboard
+                         render_timeframe_guidance("1d", mode="dashboard")
+                     else:
+                         st.error(f"Failed to fetch prediction: {resp.text}")
+                 except Exception as e:
+                     st.error(f"Error connecting to backend: {e}")
 
         with col2:
             render_account_summary()
@@ -3083,6 +3408,302 @@ def main():
 
     elif mode == "Live Signal":
         render_live_signal()
+    
+    elif mode == "Predictor Backtest Lab":
+        render_predictor_backtest_lab()
+        
+    elif mode == "Market Scanner":
+        render_market_scanner()
+
+
+
+
+# =============================================================================
+# Market Scanner UI
+# =============================================================================
+
+def render_market_scanner():
+    st.title("📡 EXITON Market Scanner")
+    st.caption("Scan the universe for swing-trade opportunities using Rule Predictor v2.")
+    
+    # Inputs
+    col1, col2, col3, col4, col5 = st.columns([1, 1, 1, 1, 1])
+    
+    with col1:
+        universe = st.selectbox("Universe", ["default", "sp500", "mvp"], index=0, key="scan_universe")
+    
+    with col2:
+        timeframe = st.selectbox("Timeframe", ["1d"], index=0, key="scan_timeframe", disabled=True)
+    
+    with col3:
+        lookback = st.slider("Lookback", min_value=100, max_value=300, value=200, step=10, key="scan_lookback")
+    
+    with col4:
+        limit = st.slider("Top N", min_value=10, max_value=100, value=50, step=10, key="scan_limit")
+        
+    with col5:
+        st.write("") # Spacer
+        st.write("")
+        run_btn = st.button("🚀 Run Market Scan", type="primary", use_container_width=True)
+        
+    # Session state for results
+    if "scan_results" not in st.session_state:
+        st.session_state["scan_results"] = None
+        
+    if run_btn:
+        try:
+            with st.spinner(f"Scanning {universe} universe..."):
+                params = {
+                    "universe": universe,
+                    "timeframe": timeframe,
+                    "lookback": lookback,
+                    "limit": limit
+                }
+                
+                response = requests.get(f"{BACKEND_URL}/scan_market", params=params, timeout=120)
+                response.raise_for_status()
+                data = response.json()
+                st.session_state["scan_results"] = data
+                
+        except Exception as e:
+            st.error(f"Error running scan: {e}")
+            return
+            
+    # Display Results
+    if st.session_state["scan_results"]:
+        data = st.session_state["scan_results"]
+        results = data.get("results", [])
+        
+        st.markdown("---")
+        st.subheader(f"📊 Scan Results ({len(results)} symbols)")
+        st.caption(f"Sorted by Bullish Score (Combined Rule v2 + Stat). Timeframe: {data.get('timeframe')}")
+        
+        if not results:
+            st.warning("No results found.")
+            return
+            
+        # Prepare table data
+        table_data = []
+        for res in results:
+            signal = res.get("final_signal", "FLAT")
+            signal_icon = "➖"
+            if "UP" in signal: signal_icon = "📈"
+            elif "DOWN" in signal: signal_icon = "📉"
+            
+            table_data.append({
+                "Symbol": res.get("symbol"),
+                "Price": f"${res.get('latest_price', 0):.2f}",
+                "Signal": f"{signal_icon} {signal}",
+                "Score": f"{res.get('combined_score', 0):.2f}",
+                "Rule": f"{res.get('rule_direction')} ({res.get('rule_score'):.2f})",
+                "Stat": f"{res.get('stat_direction')} ({res.get('stat_conf'):.2f})",
+                "Action": "Open Live Signal" # Placeholder for link
+            })
+            
+        df = pd.DataFrame(table_data)
+        
+        # Custom Styling
+        def highlight_signal(row):
+            styles = [""] * len(row)
+            signal = row["Signal"]
+            if "STRONG_UP" in signal:
+                return ["background-color: rgba(46, 204, 113, 0.2)"] * len(row)
+            elif "UP" in signal:
+                return ["background-color: rgba(46, 204, 113, 0.1)"] * len(row)
+            elif "STRONG_DOWN" in signal:
+                return ["background-color: rgba(231, 76, 60, 0.2)"] * len(row)
+            elif "DOWN" in signal:
+                return ["background-color: rgba(231, 76, 60, 0.1)"] * len(row)
+            return styles
+            
+        st.dataframe(df.style.apply(highlight_signal, axis=1), use_container_width=True, hide_index=True)
+        
+        st.info("💡 Tip: Copy a symbol and paste it into the **Live Signal** page to see detailed analysis with presets.")
+
+
+# =============================================================================
+# Predictor Backtest Lab UI
+# =============================================================================
+
+def render_predictor_backtest_lab():
+    st.title("🔬 Predictor Backtest Lab")
+    st.caption("Compare predictors on historical data to evaluate performance.")
+    
+    # Inputs
+    col1, col2, col3, col4 = st.columns([1, 1, 1, 1])
+    
+    with col1:
+        universe = load_symbol_universe(UNIVERSE_CSV)
+        default_symbols = ["NVDA", "SMCI", "TSLA", "COIN", "MSTR", "AAPL", "MSFT"]
+        options = universe if universe else default_symbols
+        symbol = st.selectbox("Symbol", options=options, index=0, key="pbl_symbol")
+    
+    with col2:
+        timeframe = st.selectbox("Timeframe", ["1d"], index=0, key="pbl_timeframe", 
+                                  help="Currently only 1d is supported")
+    
+    with col3:
+        date_presets = {
+            "Last 1 Year": 365,
+            "Last 2 Years": 730,
+            "Last 3 Years": 1095,
+            "Max Available": 0
+        }
+        preset = st.selectbox("Date Range", list(date_presets.keys()), index=2, key="pbl_preset")
+    
+    with col4:
+        st.write("")  # Spacer
+        st.write("")
+        run_btn = st.button("🚀 Run Predictor Backtest", type="primary", use_container_width=True)
+    
+    # Calculate dates
+    from datetime import datetime, timedelta
+    end_date = datetime.now().strftime("%Y-%m-%d")
+    days = date_presets[preset]
+    if days > 0:
+        start_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+    else:
+        start_date = None  # Max available
+    
+    # Session state for results
+    if "pbl_results" not in st.session_state:
+        st.session_state["pbl_results"] = None
+    
+    if run_btn:
+        try:
+            with st.spinner(f"Running predictor backtest for {symbol}..."):
+                params = {
+                    "symbol": symbol,
+                    "timeframe": timeframe,
+                }
+                if start_date:
+                    params["start"] = start_date
+                params["end"] = end_date
+                
+                response = requests.get(f"{BACKEND_URL}/predictor_backtest", params=params, timeout=60)
+                response.raise_for_status()
+                data = response.json()
+                st.session_state["pbl_results"] = data
+                
+        except Exception as e:
+            st.error(f"Error running backtest: {e}")
+            return
+    
+    # Display results
+    if st.session_state["pbl_results"]:
+        data = st.session_state["pbl_results"]
+        results = data.get("results", {})
+        
+        st.markdown("---")
+        st.subheader("📊 Predictor Comparison Results")
+        st.caption(f"Symbol: {data.get('symbol')} | Timeframe: {data.get('timeframe')} | Period: {data.get('start_date', 'Max')} to {data.get('end_date', 'Now')}")
+        
+        # Build comparison table
+        table_data = []
+        predictor_names = {
+            "buy_and_hold": "📈 Buy & Hold (Baseline)",
+            "stat": "📊 Stat Predictor",
+            "rule_v2": "🔮 Rule Predictor v2"
+        }
+        
+        best_return = -float("inf")
+        worst_return = float("inf")
+        
+        for pred_key, pred_name in predictor_names.items():
+            res = results.get(pred_key, {})
+            if "error" in res:
+                table_data.append({
+                    "Predictor": pred_name,
+                    "Total Return": "Error",
+                    "Win Rate": "-",
+                    "# Trades": "-",
+                    "Max DD": "-",
+                    "Sharpe": "-"
+                })
+            else:
+                total_return = res.get("total_return", 0)
+                if total_return > best_return:
+                    best_return = total_return
+                if total_return < worst_return:
+                    worst_return = total_return
+                    
+                table_data.append({
+                    "Predictor": pred_name,
+                    "Total Return": f"{total_return:.2f}%",
+                    "Win Rate": f"{res.get('win_rate', 0):.1f}%",
+                    "# Trades": res.get("num_trades", 0),
+                    "Max DD": f"{res.get('max_drawdown', 0):.2f}%",
+                    "Sharpe": res.get("sharpe_ratio", "-") if res.get("sharpe_ratio") else "-"
+                })
+        
+        # Display table
+        df_table = pd.DataFrame(table_data)
+        
+        # Custom styling for table
+        def highlight_returns(row):
+            styles = [""] * len(row)
+            val = row["Total Return"]
+            if val != "Error" and val != "-":
+                val_num = float(val.replace("%", ""))
+                if val_num == best_return:
+                    styles[1] = "background-color: rgba(46, 204, 113, 0.3); color: #2ecc71; font-weight: bold;"
+                elif val_num == worst_return:
+                    styles[1] = "background-color: rgba(231, 76, 60, 0.2); color: #e74c3c;"
+            return styles
+        
+        styled_df = df_table.style.apply(highlight_returns, axis=1)
+        st.dataframe(styled_df, use_container_width=True, hide_index=True)
+        
+        # Equity Curve Chart
+        st.markdown("---")
+        st.subheader("📈 Equity Curves")
+        
+        # Prepare chart data
+        chart_data = []
+        for pred_key, pred_name in predictor_names.items():
+            res = results.get(pred_key, {})
+            if "error" not in res and "equity_curve" in res:
+                for point in res["equity_curve"]:
+                    chart_data.append({
+                        "Date": point["date"],
+                        "Equity": point["equity"],
+                        "Predictor": pred_name.split(" ")[-1] if "(" in pred_name else pred_name.split(" ")[1]  # Simplify name
+                    })
+        
+        if chart_data:
+            chart_df = pd.DataFrame(chart_data)
+            chart_df["Date"] = pd.to_datetime(chart_df["Date"])
+            
+            # Use Altair for multi-line chart
+            chart = alt.Chart(chart_df).mark_line().encode(
+                x=alt.X("Date:T", title="Date"),
+                y=alt.Y("Equity:Q", title="Equity ($)"),
+                color=alt.Color("Predictor:N", legend=alt.Legend(title="Predictor")),
+                strokeDash=alt.condition(
+                    alt.datum.Predictor == "Hold",
+                    alt.value([5, 5]),
+                    alt.value([0])
+                )
+            ).properties(
+                height=400
+            ).interactive()
+            
+            st.altair_chart(chart, use_container_width=True)
+        
+        # Additional metrics
+        st.markdown("---")
+        st.subheader("📋 Detailed Metrics")
+        
+        cols = st.columns(3)
+        for i, (pred_key, pred_name) in enumerate(predictor_names.items()):
+            res = results.get(pred_key, {})
+            with cols[i]:
+                st.markdown(f"**{pred_name}**")
+                if "error" not in res:
+                    st.metric("Final Equity", f"${res.get('final_equity', 0):,.2f}")
+                    st.metric("Total Return", f"{res.get('total_return', 0):.2f}%")
+                else:
+                    st.error(res.get("error", "Unknown error"))
 
 
 # =============================================================================
@@ -3090,84 +3711,270 @@ def main():
 # =============================================================================
 
 def render_live_signal():
-    st.title("📡 Live Signal")
-    st.caption("Daily trading signal based on the active live strategy.")
+    st.title("📡 Live Signal (v1)")
+    st.caption("Real-time trading signals based on EXITON v1 architecture.")
     
-    try:
-        # Fetch Live Strategy
+    # Session state for preset tracking
+    if "live_preset" not in st.session_state:
+        st.session_state["live_preset"] = None
+    if "live_preset_modified" not in st.session_state:
+        st.session_state["live_preset_modified"] = False
+    if "live_last_symbol" not in st.session_state:
+        st.session_state["live_last_symbol"] = None
+    
+    # Load symbols from universe
+    universe = load_symbol_universe(UNIVERSE_CSV)
+    default_symbols = ["AAPL", "NVDA", "TSLA", "MSFT", "AMZN", "GOOGL", "META", "AMD", "INTC", "SMCI"]
+    options = universe if universe else default_symbols
+    
+    # Symbol selection (separate so we can detect changes)
+    col_sym = st.columns([1, 3])[0]
+    with col_sym:
+        symbol = st.selectbox("Symbol", options=options, index=0, key="live_symbol")
+    
+    # Fetch preset when symbol changes
+    if symbol != st.session_state["live_last_symbol"]:
         try:
-            strategy_res = requests.get(f"{BACKEND_URL}/live-strategy", timeout=5)
-            if strategy_res.status_code == 404:
-                st.warning("⚠️ Live strategy not set. Please configure it in Strategy Lab.")
-                return
-            strategy_res.raise_for_status()
-            live_strategy = strategy_res.json()
-        except requests.exceptions.RequestException as e:
-            st.error(f"Failed to fetch live strategy: {e}")
+            resp = requests.get(f"{BACKEND_URL}/symbol_preset", params={"symbol": symbol}, timeout=5)
+            if resp.status_code == 200:
+                data = resp.json()
+                preset = data.get("preset", {})
+                st.session_state["live_preset"] = preset
+                st.session_state["live_preset_modified"] = False
+                
+                # Set default values based on preset
+                st.session_state["live_timeframe_default"] = preset.get("timeframe", "1d")
+                st.session_state["live_lookback_default"] = preset.get("lookback", 200)
+        except Exception:
+            st.session_state["live_preset"] = None
+        
+        st.session_state["live_last_symbol"] = symbol
+    
+    # Get preset values for defaults
+    preset = st.session_state.get("live_preset") or {}
+    preset_tf = preset.get("timeframe", "1d")
+    preset_lookback = preset.get("lookback", 200)
+    
+    # Inputs
+    col_in2, col_in3, col_btn = st.columns([1, 1, 1])
+    with col_in2:
+        tf_options = ["1d", "1h", "4h", "15m"]
+        tf_index = tf_options.index(preset_tf) if preset_tf in tf_options else 0
+        timeframe = st.selectbox("Timeframe", tf_options, index=tf_index, key="live_timeframe")
+        
+        # Check if modified
+        if timeframe != preset_tf:
+            st.session_state["live_preset_modified"] = True
+    
+    with col_in3:
+        lookback = st.number_input("Lookback", min_value=50, max_value=500, value=preset_lookback, step=10, key="live_lookback")
+        
+        # Check if modified
+        if lookback != preset_lookback:
+            st.session_state["live_preset_modified"] = True
+    
+    with col_btn:
+        st.write("")  # Spacer
+        st.write("")
+        run_btn = st.button("🚀 Run Live Analysis", type="primary", use_container_width=True)
+    
+    # Preset Info Box
+    if preset:
+        predictor_names = {"rule_v2": "Rule Predictor v2", "stat": "Stat Predictor", "ml_v1": "ML Predictor v1"}
+        pred_name = predictor_names.get(preset.get("predictor", "rule_v2"), preset.get("predictor", "?"))
+        modified_label = " <span style='color: #f39c12; font-weight: bold;'>(Modified)</span>" if st.session_state["live_preset_modified"] else ""
+        
+        st.markdown(f"""
+<div style="
+    background: linear-gradient(135deg, rgba(155, 89, 182, 0.1) 0%, rgba(155, 89, 182, 0.05) 100%);
+    border: 1px solid rgba(155, 89, 182, 0.3);
+    border-radius: 8px;
+    padding: 10px 14px;
+    margin-bottom: 10px;
+    font-size: 13px;
+">
+    <span style="color: #9b59b6; font-weight: 600;">⚙️ Preset for {symbol}:</span>{modified_label}<br>
+    <span style="color: #bbb;">
+        {pred_name} | {preset.get("timeframe", "1d")} timeframe | Lookback {preset.get("lookback", 200)} | 
+        Min hold {preset.get("min_hold_days", 3)} days | Risk {preset.get("position_risk_pct", 0.05)*100:.0f}%
+    </span>
+</div>
+""", unsafe_allow_html=True)
+    
+    # Timeframe Guidance
+    render_timeframe_guidance(timeframe, mode="live_signal")
+        
+    # Initialize session state for Live Signal
+    if "live_signal_data" not in st.session_state:
+        st.session_state["live_signal_data"] = None
+    if "live_chart_data" not in st.session_state:
+        st.session_state["live_chart_data"] = None
+    if "live_signal_params" not in st.session_state:
+        st.session_state["live_signal_params"] = {}
+
+    if run_btn:
+        try:
+            with st.spinner(f"Analyzing {symbol}..."):
+                # Call API
+                params = {
+                    "symbol": symbol,
+                    "timeframe": timeframe,
+                    "lookback": lookback
+                }
+                response = requests.get(f"{BACKEND_URL}/live/signal", params=params, timeout=10)
+                response.raise_for_status()
+                data = response.json()
+                
+                # Fetch Chart Data
+                chart_res = requests.get(
+                    f"{BACKEND_URL}/chart-data", 
+                    params={"symbol": symbol, "interval": timeframe, "limit": lookback, "with_ma": "true"}
+                )
+                chart_data = []
+                if chart_res.status_code == 200:
+                    chart_data = chart_res.json().get("data", [])
+                
+                # Store in Session State
+                st.session_state["live_signal_data"] = data
+                st.session_state["live_chart_data"] = chart_data
+                st.session_state["live_signal_params"] = params
+                
+        except Exception as e:
+            st.error(f"Error running analysis: {e}")
             return
 
-        # Fetch Live Signal
-        with st.spinner("Fetching live signal..."):
-            try:
-                signal_res = requests.get(f"{BACKEND_URL}/live-signal", timeout=10)
-                signal_res.raise_for_status()
-                live_signal = signal_res.json()
-            except requests.exceptions.RequestException as e:
-                st.error(f"Failed to fetch live signal: {e}")
-                if e.response is not None:
-                    st.error(f"Details: {e.response.text}")
+    # Render UI if data exists (Persistent)
+    if st.session_state["live_signal_data"]:
+        data = st.session_state["live_signal_data"]
+        chart_data = st.session_state["live_chart_data"]
+        
+        # Parse Response
+        latest_price = data.get("latest_price", 0.0)
+        price_time = data.get("price_time", "")
+        final_signal = data.get("final_signal", {})
+        predictions = data.get("predictions", {})
+        
+        # --- UI Layout ---
+        
+        # 1. Top Metrics (Price & Final Signal)
+        m1, m2, m3 = st.columns(3)
+        with m1:
+            st.metric("Latest Price", f"${latest_price:,.2f}", help=f"Time: {price_time}")
+        with m2:
+            action = final_signal.get("action", "HOLD").upper()
+            conf = final_signal.get("confidence", 0.0)
+            color = "off"
+            if action == "BUY": color = "normal" 
+            elif action == "SELL": color = "inverse"
+            
+            st.metric("Final Signal", action, f"Conf: {conf:.2f}")
+        with m3:
+            st.info(f"**Reason:** {final_signal.get('reason', 'N/A')}")
+            
+        st.markdown("---")
+        
+        # 2. Predictor Breakdown
+        st.subheader("🤖 Predictor Breakdown")
+        p1, p2, p3 = st.columns(3)
+        
+
+
+        with p1:
+            render_predictor_card("Stat Predictor", predictions.get("stat", {}))
+        with p2:
+            render_predictor_card("Rule Predictor v2", predictions.get("rule", {}))
+        with p3:
+            render_predictor_card("ML Predictor (v1)", predictions.get("ml", {}))
+            
+        st.markdown("---")
+        
+        # 3. Chart (Price + MA)
+        # Anti Summary: Simplified chart logic. Removed "Fit Y-Axis" checkbox. Fixed data types and auto-scaling (zero=False).
+        st.subheader("📈 Price Chart")
+
+        if chart_data:
+            df_chart = pd.DataFrame(chart_data)
+            
+            # Normalize time column
+            if "timestamp" in df_chart.columns:
+                df_chart["time"] = pd.to_datetime(df_chart["timestamp"])
+            elif "time" in df_chart.columns:
+                df_chart["time"] = pd.to_datetime(df_chart["time"])
+            else:
+                st.warning("No time column found in chart data.")
                 return
 
-        # Display
-        col1, col2 = st.columns([1, 2])
-        
-        with col1:
-            st.subheader("Strategy Overview")
-            st.info(f"**Symbol:** {live_strategy['symbol']} ({live_strategy['timeframe']})")
-            st.write(f"**Strategy:** {live_strategy['strategy_name']}")
-            st.write(f"**Type:** {live_strategy['strategy_type']}")
-            st.json(live_strategy['params'], expanded=False)
+            # Ensure numeric types for scaling
+            numeric_cols = ["open", "high", "low", "close"]
+            if "ma_short" in df_chart.columns: numeric_cols.append("ma_short")
+            if "ma_long" in df_chart.columns: numeric_cols.append("ma_long")
             
-            st.markdown("---")
-            st.write("**Risk Settings**")
-            risk = live_strategy['risk']
-            if risk['position_mode'] == 'fixed_shares':
-                st.write(f"Mode: Fixed Shares")
-                st.write(f"Value: {risk['position_value']} shares")
-            else:
-                st.write(f"Mode: Fixed Amount (JPY)")
-                st.write(f"Value: ¥{risk['position_value']:,.0f}")
+            # Check if we have valid data
+            has_valid_data = False
+            for col in numeric_cols:
+                df_chart[col] = pd.to_numeric(df_chart[col], errors='coerce')
+                if df_chart[col].notna().any():
+                    has_valid_data = True
+            
+            if not has_valid_data:
+                st.warning("No valid price data to display.")
+                return
 
-        with col2:
-            st.subheader("Today's Signal")
-            
-            signal = live_signal['signal']
-            color = "gray"
-            if signal == "BUY": color = "green"
-            elif signal == "SELL": color = "red"
-            
-            st.markdown(
-                f"""
-                <div style="text-align: center; padding: 20px; border: 2px solid {color}; border-radius: 10px; background-color: rgba(0,0,0,0.05);">
-                    <h1 style="color: {color}; font-size: 72px; margin: 0;">{signal}</h1>
-                    <p style="font-size: 24px;">Latest Price: <strong>{live_signal['latest_price']:,.2f}</strong></p>
-                    <p style="font-size: 18px; color: #666;">{live_signal['timestamp']}</p>
-                </div>
-                """,
-                unsafe_allow_html=True
+            # Simple Auto-Scale (Zero=False)
+            y_scale = alt.Scale(zero=False)
+
+            base = alt.Chart(df_chart).encode(
+                x=alt.X('time:T', axis=alt.Axis(title="Time", format="%m/%d %H:%M"))
             )
             
-            st.markdown("### 📦 Suggested Order")
-            shares = live_signal['risk']['suggested_shares']
-            st.metric("Quantity", f"{shares} shares")
-            
-            est_value = shares * live_signal['latest_price']
-            st.caption(f"Estimated Value: ¥{est_value:,.0f}")
-            
-            st.info("💡 After placing the order in your brokerage app, please record the actual trade in the 'Trade Log' (coming soon).")
+            # Tooltip setup
+            tooltip = [
+                alt.Tooltip('time:T', title='Time', format='%Y-%m-%d %H:%M'),
+                alt.Tooltip('open:Q', title='Open', format=',.2f'),
+                alt.Tooltip('high:Q', title='High', format=',.2f'),
+                alt.Tooltip('low:Q', title='Low', format=',.2f'),
+                alt.Tooltip('close:Q', title='Close', format=',.2f'),
+            ]
+            if "ma_short" in df_chart.columns:
+                tooltip.append(alt.Tooltip('ma_short:Q', title='MA Short', format=',.2f'))
+            if "ma_long" in df_chart.columns:
+                tooltip.append(alt.Tooltip('ma_long:Q', title='MA Long', format=',.2f'))
 
-    except Exception as e:
-        st.error(f"An unexpected error occurred: {e}")
+            line = base.mark_line(color='#bdc3c7').encode(
+                y=alt.Y('close:Q', scale=y_scale, title="Price"),
+                tooltip=tooltip
+            )
+            
+            layers = [line]
+            
+            if "ma_short" in df_chart.columns:
+                ma_s = base.mark_line(color='#f39c12').encode(
+                    y='ma_short:Q',
+                    tooltip=tooltip
+                )
+                # Label at the end
+                last_val = df_chart["ma_short"].iloc[-1]
+                if pd.notna(last_val):
+                    label_s = base.mark_text(align='left', dx=5, color='#f39c12').encode(
+                        x=alt.value(600), # Approximate right edge
+                        y=alt.datum(last_val),
+                        text=alt.value(f"MA Short: {last_val:.2f}")
+                    )
+                    layers.append(ma_s)
+                
+            if "ma_long" in df_chart.columns:
+                ma_l = base.mark_line(color='#3498db').encode(
+                    y='ma_long:Q',
+                    tooltip=tooltip
+                )
+                layers.append(ma_l)
+                
+            st.altair_chart(alt.layer(*layers).interactive(), use_container_width=True)
+        else:
+            if st.session_state["live_signal_data"]: # Only show warning if we have signal but no chart
+                 st.warning("Could not load chart data.")
+
+
 
 
 if __name__ == "__main__":

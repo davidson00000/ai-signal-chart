@@ -420,61 +420,7 @@ async def optimize_ma_cross(request: MACrossOptimizationRequest) -> Optimization
         raise HTTPException(status_code=500, detail=f"Optimization failed: {str(e)}")
 
 
-@app.post("/optimize/generic", response_model=OptimizationResponse)
-async def optimize_generic(request: GenericOptimizationRequest) -> OptimizationResponse:
-    """
-    Generic Grid Search Optimization Endpoint
-    """
-    try:
-        from backend.optimizer import GridSearchOptimizer
-        
-        # Calculate total combinations
-        total_combinations = 1
-        for values in request.param_grid.values():
-            total_combinations *= len(values)
-            
-        if total_combinations > 1000:
-             raise HTTPException(
-                status_code=422, 
-                detail=f"Too many combinations: {total_combinations}. Limit is 1000."
-            )
 
-        optimizer = GridSearchOptimizer()
-        
-        # Run optimization
-        results = optimizer.optimize(
-            symbol=request.symbol,
-            timeframe=request.timeframe,
-            start_date=request.start_date,
-            end_date=request.end_date,
-            param_grid=request.param_grid,
-            initial_capital=request.initial_capital,
-            commission_rate=request.commission_rate,
-            position_size=1.0,
-            strategy_type=request.strategy_type,
-            fixed_params=request.fixed_params
-        )
-        
-        return OptimizationResponse(
-            symbol=request.symbol,
-            timeframe=request.timeframe,
-            strategy_type=request.strategy_type,
-            total_combinations=len(results),
-            top_results=[
-                {
-                    "rank": i + 1,
-                    **r.to_dict()
-                }
-                for i, r in enumerate(results)
-            ]
-        )
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Optimization failed: {str(e)}")
 
 
 @app.post("/optimize", response_model=OptimizationResponse)
@@ -801,6 +747,38 @@ async def update_experiment_endpoint(experiment_id: str, updates: Dict[str, Any]
         raise HTTPException(status_code=500, detail=f"Failed to update experiment: {str(e)}")
 
 
+@app.get("/live/signal")
+async def get_live_signal(
+    symbol: str,
+    timeframe: str = "1d",
+    lookback: int = 200,
+    limit_signals: int = 10
+) -> Dict[str, Any]:
+    """
+    Get live trading signal for EXITON v1.
+    
+    Args:
+        symbol: Ticker symbol (e.g. "AAPL")
+        timeframe: Candle timeframe (e.g. "1d")
+        lookback: Number of candles to analyze
+        limit_signals: Max number of history signals to return
+        
+    Returns:
+        EXITON v1 Signal Response
+    """
+    try:
+        from backend.live.signal_generator import generate_live_signal
+        
+        result = generate_live_signal(symbol, timeframe, lookback)
+        return result
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Live signal generation failed: {str(e)}")
+
+
+
 @app.delete("/experiments/{experiment_id}")
 async def delete_experiment_endpoint(experiment_id: str) -> Dict[str, str]:
     """
@@ -1037,7 +1015,214 @@ async def get_live_signal_endpoint() -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# `python -m backend.main` で起動できるように
+@app.get("/rule_predictor_v2")
+async def get_rule_predictor_v2(symbol: str) -> Dict[str, Any]:
+    """
+    Rule Predictor v2: 5 Indicators + Weighted Vote.
+    """
+    try:
+        from backend.rule_predictor_v2 import predict
+        from backend import data_feed
+        import pandas as pd
+        from datetime import datetime, timedelta
+        
+        # Fetch Data (need enough for 30MA + buffer)
+        start_date = (datetime.now() - timedelta(days=200)).strftime("%Y-%m-%d")
+        candles = data_feed.get_chart_data(symbol, "1d", limit=300, start=start_date)
+        
+        if not candles:
+             raise HTTPException(status_code=400, detail=f"No data found for {symbol}")
+        
+        df = pd.DataFrame(candles)
+        if "time" in df.columns:
+            df["date"] = pd.to_datetime(df["time"], unit="s")
+        
+        # Run Prediction
+        result = predict(df)
+        
+        return {
+            "symbol": symbol,
+            "timestamp": df["date"].iloc[-1].isoformat(),
+            **result
+        }
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Rule Predictor v2 failed: {str(e)}")
+
+
+@app.get("/predictor_backtest")
+async def get_predictor_backtest(
+    symbol: str,
+    timeframe: str = "1d",
+    start: Optional[str] = None,
+    end: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Run backtest for all predictors (Stat, Rule v2, Buy & Hold).
+    
+    Args:
+        symbol: Stock symbol
+        timeframe: Timeframe (1d, 4h, etc.)
+        start: Start date (YYYY-MM-DD)
+        end: End date (YYYY-MM-DD)
+        
+    Returns:
+        Comparison results for all predictors
+    """
+    try:
+        from backend.predictor_eval import run_all_predictors_backtest
+        
+        result = run_all_predictors_backtest(
+            symbol=symbol,
+            timeframe=timeframe,
+            start_date=start,
+            end_date=end
+        )
+        
+        return result
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Predictor backtest failed: {str(e)}")
+
+
+@app.get("/symbol_preset")
+async def get_symbol_preset(symbol: str) -> Dict[str, Any]:
+    """
+    Get strategy preset for a symbol.
+    
+    Args:
+        symbol: Stock symbol
+        
+    Returns:
+        Preset configuration for the symbol
+    """
+    try:
+        from backend.config.presets import load_symbol_preset
+        
+        preset = load_symbol_preset(symbol)
+        return {
+            "symbol": symbol,
+            "preset": preset
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to load preset: {str(e)}")
+
+
+@app.post("/symbol_preset")
+async def save_symbol_preset_endpoint(data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Save or update a strategy preset for a symbol.
+    
+    Body:
+        { "symbol": "NVDA", "preset": { ... } }
+        
+    Returns:
+        Success status
+    """
+    try:
+        from backend.config.presets import save_symbol_preset
+        
+        symbol = data.get("symbol")
+        preset = data.get("preset")
+        
+        if not symbol or not preset:
+            raise HTTPException(status_code=400, detail="Missing symbol or preset")
+        
+        success = save_symbol_preset(symbol, preset)
+        
+        if success:
+            return {"status": "success", "symbol": symbol, "message": f"Preset saved for {symbol}"}
+        else:
+            raise HTTPException(status_code=500, detail="Failed to save preset")
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save preset: {str(e)}")
+
+
+@app.post("/optimize/generic", response_model=OptimizationResponse)
+async def optimize_generic_endpoint(request: GenericOptimizationRequest) -> OptimizationResponse:
+    """
+    Generic parameter optimization endpoint.
+    """
+    try:
+        from backend.optimizer import GridSearchOptimizer
+        
+        optimizer = GridSearchOptimizer()
+        
+        results = optimizer.optimize(
+            symbol=request.symbol,
+            timeframe=request.timeframe,
+            start_date=request.start_date,
+            end_date=request.end_date,
+            param_grid=request.param_grid,
+            initial_capital=request.initial_capital,
+            commission_rate=request.commission_rate,
+            strategy_type=request.strategy_type,
+            fixed_params=request.fixed_params
+        )
+        
+        # Convert results to dict
+        normalized_results = [r.to_dict() for r in results]
+        
+        return OptimizationResponse(
+            symbol=request.symbol,
+            timeframe=request.timeframe,
+            strategy_type=request.strategy_type,
+            total_combinations=len(results),
+            results=normalized_results
+        )
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Optimization failed: {str(e)}")
+
+
+@app.get("/scan_market")
+async def scan_market_endpoint(
+    universe: str = "default",
+    timeframe: str = "1d",
+    lookback: int = 200,
+    limit: int = 50
+) -> Dict[str, Any]:
+    """
+    Scan the market for trading opportunities.
+    
+    Args:
+        universe: "default", "sp500", "mvp"
+        timeframe: "1d"
+        lookback: 200
+        limit: Max results to return
+        
+    Returns:
+        List of symbols ranked by bullish score
+    """
+    try:
+        from backend.market_scanner import scan_market
+        
+        result = scan_market(
+            universe_name=universe,
+            timeframe=timeframe,
+            lookback=lookback,
+            limit=limit
+        )
+        
+        return result
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Market scan failed: {str(e)}")
+
+
+
 if __name__ == "__main__":
     import uvicorn
 

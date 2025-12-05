@@ -53,7 +53,7 @@ class OptimizationResponse(BaseModel):
     timeframe: str = Field(..., description="Timeframe used")
     strategy_type: str = Field(..., description="Strategy type")
     total_combinations: int = Field(..., description="Total combinations tested")
-    top_results: List[Dict[str, Any]] = Field(..., description="Top optimization results")
+    results: List[Dict[str, Any]] = Field(..., description="Top optimization results")
 
 
 class MACrossOptimizationRequest(BaseModel):
