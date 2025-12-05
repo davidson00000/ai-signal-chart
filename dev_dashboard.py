@@ -4265,7 +4265,9 @@ def render_live_signal():
                             with c8:
                                 ac1, ac2 = st.columns(2)
                                 with ac1:
-                                    if st.button("Close", key=f"close_{pos_id}", type="primary", use_container_width=True):
+                                    # Unique key for Close button
+                                    close_key = f"paper_close_default_{pos_id}"
+                                    if st.button("Close", key=close_key, type="primary", use_container_width=True):
                                         # Close Position
                                         try:
                                             cl_resp = requests.post(
@@ -4274,24 +4276,27 @@ def render_live_signal():
                                                 timeout=10
                                             )
                                             if cl_resp.status_code == 200:
-                                                st.success(f"Closed {pos_id}")
-                                                # Force reload by updating session state dummy
-                                                st.session_state["_paper_update"] = datetime.now()
+                                                st.toast(f"✅ Closed {pos_id}")
+                                                time.sleep(0.5) # Brief pause to let toast be seen/processed
+                                                st.rerun()
                                             else:
-                                                st.error("Failed")
+                                                st.error("Failed to close")
                                         except Exception as e:
                                             st.error(f"Err: {e}")
                                             
                                 with ac2:
-                                    if st.button("×", key=f"del_{pos_id}", help="Delete (Cancel)", use_container_width=True):
+                                    # Unique key for Delete button
+                                    del_key = f"paper_del_default_{pos_id}"
+                                    if st.button("×", key=del_key, help="Delete (Cancel)", use_container_width=True):
                                         # Delete Position
                                         try:
                                             del_resp = requests.delete(f"{BACKEND_URL}/paper/positions/{pos_id}", timeout=10)
                                             if del_resp.status_code == 204:
-                                                st.warning(f"Deleted {pos_id}")
-                                                st.session_state["_paper_update"] = datetime.now()
+                                                st.toast(f"⚠️ Deleted {pos_id}")
+                                                time.sleep(0.5)
+                                                st.rerun()
                                             else:
-                                                st.error("Failed")
+                                                st.error("Failed to delete")
                                         except Exception as e:
                                             st.error(f"Err: {e}")
 
