@@ -102,6 +102,59 @@ from backend.strategies import (
 )
 
 # ============================================================================
+# URL Query Parameter Handling
+# ============================================================================
+
+def handle_url_params():
+    """
+    Parse URL parameters and initialize session state accordingly.
+    Supported params:
+    - mode: "live_signal", "market_scanner", etc.
+    - symbol: "NVDA", "AAPL", etc.
+    - timeframe: "1d", "4h", etc.
+    """
+    # Initialize session state for mode if not exists
+    if "mode" not in st.session_state:
+        st.session_state["mode"] = "Developer Dashboard"
+
+    try:
+        query_params = st.query_params
+        
+        # 1. Handle Mode
+        url_mode = query_params.get("mode")
+        if url_mode:
+            mode_map = {
+                "dashboard": "Developer Dashboard",
+                "backtest": "Backtest Lab",
+                "strategy": "Strategy Lab",
+                "live_signal": "Live Signal",
+                "predictor": "Predictor Backtest Lab",
+                "scanner": "Market Scanner"
+            }
+            if url_mode in mode_map:
+                st.session_state["mode"] = mode_map[url_mode]
+        
+        # 2. Handle Live Signal Params (Symbol, Timeframe)
+        # We use the existing 'nav_live_signal' mechanism to pass these values
+        url_symbol = query_params.get("symbol")
+        url_timeframe = query_params.get("timeframe")
+        
+        if url_symbol and st.session_state["mode"] == "Live Signal":
+            # Only trigger navigation if not already set to avoid loop
+            if "nav_live_signal" not in st.session_state:
+                st.session_state["nav_live_signal"] = {
+                    "symbol": url_symbol,
+                    "timeframe": url_timeframe if url_timeframe else "1d",
+                    "lookback": 200 # Default
+                }
+                
+    except Exception as e:
+        print(f"Error parsing URL params: {e}")
+
+# Call immediately on script load
+handle_url_params()
+
+# ============================================================================
 # Helpers
 # ============================================================================
 
@@ -3300,11 +3353,37 @@ def main():
         st.session_state["optimization_params"] = {}
 
     # Sidebar mode switch
+    # Use session state to control default selection if navigated from URL
+    default_index = 0
+    if "mode" in st.session_state:
+        options = ["Developer Dashboard", "Backtest Lab", "Strategy Lab", "Live Signal", "Predictor Backtest Lab", "Market Scanner"]
+        if st.session_state["mode"] in options:
+            default_index = options.index(st.session_state["mode"])
+
     mode = st.sidebar.selectbox(
         "Mode",
         options=["Developer Dashboard", "Backtest Lab", "Strategy Lab", "Live Signal", "Predictor Backtest Lab", "Market Scanner"],
-        index=0,
+        index=default_index,
+        key="mode_selector"
     )
+    
+    # Update session state and URL params
+    st.session_state["mode"] = mode
+    
+    mode_map_rev = {
+        "Developer Dashboard": "dashboard",
+        "Backtest Lab": "backtest",
+        "Strategy Lab": "strategy",
+        "Live Signal": "live_signal",
+        "Predictor Backtest Lab": "predictor",
+        "Market Scanner": "scanner"
+    }
+    
+    # Update URL params
+    params = st.query_params.to_dict()
+    params["mode"] = mode_map_rev.get(mode, "dashboard")
+    st.query_params.clear()
+    st.query_params.update(params)
     
     # Strategy Lab Section Navigator (shown only when in Strategy Lab mode)
     lab_section = None
@@ -3748,8 +3827,17 @@ def render_predictor_backtest_lab():
 # =============================================================================
 
 def render_live_signal():
-    st.title("📡 Live Signal (v1)")
-    st.caption("Real-time trading signals based on EXITON v1 architecture.")
+    col_title, col_back = st.columns([3, 1])
+    with col_title:
+        st.title("📡 Live Signal (v1)")
+        st.caption("Real-time trading signals based on EXITON v1 architecture.")
+    with col_back:
+        st.write("")
+        st.write("")
+        if st.button("⬅️ Back to Scanner", use_container_width=True):
+            st.session_state["mode"] = "Market Scanner"
+            st.query_params["mode"] = "scanner"
+            st.rerun()
     
     # =========================================================================
     # TASK B: Handle navigation from Market Scanner
@@ -3792,6 +3880,11 @@ def render_live_signal():
     col_sym = st.columns([1, 3])[0]
     with col_sym:
         symbol = st.selectbox("Symbol", options=options, index=default_symbol_index, key="live_symbol")
+        
+        # Update URL with symbol
+        params = st.query_params.to_dict()
+        params["symbol"] = symbol
+        st.query_params.update(params)
     
     # Fetch preset when symbol changes
     if symbol != st.session_state["live_last_symbol"]:
@@ -3868,6 +3961,11 @@ def render_live_signal():
     
     # Timeframe Guidance
     render_timeframe_guidance(timeframe, mode="live_signal")
+    
+    # Update URL with timeframe
+    params = st.query_params.to_dict()
+    params["timeframe"] = timeframe
+    st.query_params.update(params)
         
     # Initialize session state for Live Signal
     if "live_signal_data" not in st.session_state:
