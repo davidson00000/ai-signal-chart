@@ -1105,25 +1105,53 @@ def run_auto_simulation(config: AutoSimConfig) -> AutoSimResult:
     # 4. Close any open position at the end
     if position_side == "long" and not simulation_halted:
         exit_price = float(df.iloc[-1]["close"])
+        exit_time_ts = df.iloc[-1]["timestamp"]
         pnl = (exit_price - entry_price) * position_size
         
         r_value = None
         if config.use_r_management and entry_risk_amount > 0:
             r_value = pnl / entry_risk_amount
         
+        equity_before = equity
         equity += pnl
         
         trades.append({
+            "trade_id": current_trade_id,
             "entry_time": entry_time.isoformat() if hasattr(entry_time, 'isoformat') else str(entry_time),
-            "exit_time": df.iloc[-1]["timestamp"].isoformat() if hasattr(df.iloc[-1]["timestamp"], 'isoformat') else str(df.iloc[-1]["timestamp"]),
+            "exit_time": exit_time_ts.isoformat() if hasattr(exit_time_ts, 'isoformat') else str(exit_time_ts),
             "entry_price": entry_price,
             "exit_price": exit_price,
             "size": position_size,
             "pnl": round(pnl, 2),
             "return_pct": round((exit_price / entry_price - 1) * 100, 2),
             "r_value": round(r_value, 2) if r_value is not None else None,
+            "stop_price": entry_stop_price if config.use_r_management else None,
+            "risk_amount": round(entry_risk_amount, 2) if config.use_r_management else None,
+            "execution_mode": config.execution_mode,
             "note": "Closed at end of simulation"
         })
+        
+        # Add exit event to decision log
+        decision_log.add(DecisionEvent(
+            timestamp=exit_time_ts,
+            symbol=config.symbol,
+            timeframe=config.timeframe,
+            event_type="exit",
+            final_signal="sell",
+            position_side="flat",
+            position_size=position_size,
+            price=exit_price,
+            execution_price=exit_price,
+            execution_mode=config.execution_mode,
+            r_value=r_value,
+            stop_price=entry_stop_price if config.use_r_management else None,
+            risk_amount=entry_risk_amount if config.use_r_management else None,
+            equity_before=equity_before,
+            equity_after=equity,
+            trade_id=current_trade_id,
+            reason=f"Exit LONG @ ${exit_price:.2f} (end of simulation). PnL: ${pnl:+.2f}"
+                  + (f" [R: {r_value:+.2f}]" if r_value is not None else "")
+        ))
     
     # 5. Calculate Summary Stats
     final_equity = equity
