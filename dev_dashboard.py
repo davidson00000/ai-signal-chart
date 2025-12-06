@@ -4586,17 +4586,74 @@ def render_multi_symbol_sim():
         rsi_overbought = 70
         
         if strategy_mode == "ma_crossover":
-            ma_short = st.number_input(
-                "MA Short Window",
-                min_value=5, max_value=100, value=50,
-                key="multi_sim_ma_short"
-            )
+            # MA Strategy Presets
+            ma_presets = {
+                "short": {"label": "Short (10/20)", "short": 10, "long": 20},
+                "medium": {"label": "Medium (20/50)", "short": 20, "long": 50},
+                "long": {"label": "Long (50/200)", "short": 50, "long": 200},
+                "custom": {"label": "Custom", "short": None, "long": None}
+            }
             
-            ma_long = st.number_input(
-                "MA Long Window",
-                min_value=10, max_value=200, value=60,
-                key="multi_sim_ma_long"
-            )
+            # Initialize MA preset state if not exists
+            if "_ma_preset" not in st.session_state:
+                st.session_state["_ma_preset"] = "medium"
+            if "_ma_custom_short" not in st.session_state:
+                st.session_state["_ma_custom_short"] = 20
+            if "_ma_custom_long" not in st.session_state:
+                st.session_state["_ma_custom_long"] = 50
+            
+            # MA Preset selector
+            st.markdown("**MA Preset**")
+            preset_cols = st.columns(4)
+            
+            current_preset = st.session_state.get("_ma_preset", "medium")
+            
+            for i, (preset_key, preset_data) in enumerate(ma_presets.items()):
+                with preset_cols[i]:
+                    is_selected = current_preset == preset_key
+                    button_type = "primary" if is_selected else "secondary"
+                    
+                    if st.button(
+                        preset_data["label"],
+                        key=f"ma_preset_{preset_key}",
+                        type=button_type,
+                        use_container_width=True
+                    ):
+                        st.session_state["_ma_preset"] = preset_key
+                        if preset_key != "custom":
+                            st.session_state["_ma_custom_short"] = preset_data["short"]
+                            st.session_state["_ma_custom_long"] = preset_data["long"]
+                        st.rerun()
+            
+            # Get current preset values
+            current_preset = st.session_state.get("_ma_preset", "medium")
+            
+            if current_preset == "custom":
+                # Custom mode - editable fields
+                ma_short = st.number_input(
+                    "MA Short Window",
+                    min_value=5, max_value=100,
+                    value=st.session_state.get("_ma_custom_short", 20),
+                    key="multi_sim_ma_short"
+                )
+                
+                ma_long = st.number_input(
+                    "MA Long Window",
+                    min_value=10, max_value=300,
+                    value=st.session_state.get("_ma_custom_long", 50),
+                    key="multi_sim_ma_long"
+                )
+                
+                # Update custom values in session state
+                st.session_state["_ma_custom_short"] = ma_short
+                st.session_state["_ma_custom_long"] = ma_long
+            else:
+                # Preset mode - show values but not editable
+                preset_data = ma_presets[current_preset]
+                ma_short = preset_data["short"]
+                ma_long = preset_data["long"]
+                
+                st.info(f"📊 MA Short: **{ma_short}** / MA Long: **{ma_long}**")
         
         elif strategy_mode == "rsi_mean_reversion":
             rsi_period = st.number_input(
