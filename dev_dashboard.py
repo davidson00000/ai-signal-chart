@@ -1419,6 +1419,10 @@ def render_single_analysis_section():
         "ma_cross": {"label": "MA Cross", "usable": True},
         "rsi_mean_reversion": {"label": "RSI Mean Reversion", "usable": True},
         "ema9_dip_buy": {"label": "EMA9 Dip Buy", "usable": True},
+        "ema_crossover": {"label": "EMA Crossover", "usable": True},
+        "macd": {"label": "MACD Signal Line", "usable": True},
+        "breakout": {"label": "Breakout Strategy", "usable": True},
+        "bollinger": {"label": "Bollinger Mean Reversion", "usable": True},
     }
     strategy_cfg = STRATEGY_TEMPLATES.get(strategy_type, {"label": strategy_type, "usable": False})
     
@@ -1516,6 +1520,43 @@ def render_single_analysis_section():
                 "risk_reward": risk_reward,
                 "lookback_volume": lookback_volume
             }
+            
+        # EMA Crossover
+        elif strategy_type == "ema_crossover":
+            st.markdown("**EMA Crossover**")
+            st.caption("Buy when Short EMA crosses above Long EMA. Sell when Short EMA crosses below Long EMA.")
+            col1, col2 = st.columns(2)
+            with col1: ema_short = st.number_input("EMA Short", min_value=1, value=12, key="sl_ema_short")
+            with col2: ema_long = st.number_input("EMA Long", min_value=1, value=26, key="sl_ema_long")
+            strategy_params = {"ema_short": ema_short, "ema_long": ema_long}
+            
+        # MACD
+        elif strategy_type == "macd":
+            st.markdown("**MACD Signal Line**")
+            st.caption("Buy when MACD line crosses above Signal line. Sell when MACD line crosses below Signal line.")
+            col1, col2, col3 = st.columns(3)
+            with col1: macd_fast = st.number_input("MACD Fast", min_value=1, value=12, key="sl_macd_fast")
+            with col2: macd_slow = st.number_input("MACD Slow", min_value=1, value=26, key="sl_macd_slow")
+            with col3: macd_signal = st.number_input("MACD Signal", min_value=1, value=9, key="sl_macd_sig")
+            strategy_params = {"macd_fast": macd_fast, "macd_slow": macd_slow, "macd_signal": macd_signal}
+            
+        # Breakout
+        elif strategy_type == "breakout":
+            st.markdown("**Breakout Strategy**")
+            st.caption("Buy on N-day High breakout. Exit on N-day Low breakout.")
+            col1, col2 = st.columns(2)
+            with col1: breakout_window = st.number_input("Breakout Window", min_value=1, value=20, key="sl_bo_win")
+            with col2: exit_window = st.number_input("Exit Window", min_value=1, value=10, key="sl_ex_win")
+            strategy_params = {"breakout_window": breakout_window, "exit_window": exit_window}
+            
+        # Bollinger
+        elif strategy_type == "bollinger":
+            st.markdown("**Bollinger Mean Reversion**")
+            st.caption("Buy when price closes below Lower Band. Sell when price closes above Middle Band.")
+            col1, col2 = st.columns(2)
+            with col1: bb_period = st.number_input("BB Period", min_value=1, value=20, key="sl_bb_per")
+            with col2: bb_std = st.number_input("BB Std Dev", min_value=0.1, value=2.0, step=0.1, key="sl_bb_std")
+            strategy_params = {"bb_period": bb_period, "bb_std": bb_std}
         
         else:
             st.error(f"Unknown strategy: {strategy_type}")
@@ -3918,43 +3959,78 @@ def render_auto_sim_historical():
     st.markdown("---")
     
     # Strategy Mode Selection
+    # Strategy Mode Selection
     st.subheader("🎯 Strategy Mode")
     
-    strategy_mode = st.radio(
+    strategy_options = {
+        "final_signal": "Final Signal (Default)",
+        "ma_crossover": "MA Crossover",
+        "buy_and_hold": "Buy & Hold",
+        "rsi_mean_reversion": "RSI Mean Reversion",
+        "ema_crossover": "EMA Crossover",
+        "macd": "MACD Signal Line",
+        "breakout": "Breakout Strategy",
+        "bollinger": "Bollinger Mean Reversion"
+    }
+    
+    strategy_mode = st.selectbox(
         "Select Strategy",
-        ["Final Signal (Default)", "MA Crossover (Match Strategy Lab)"],
-        horizontal=True,
-        key="auto_sim_hist_strategy_mode"
+        options=list(strategy_options.keys()),
+        format_func=lambda x: strategy_options[x],
+        key="auto_sim_hist_strategy_select"
     )
     
-    is_ma_mode = strategy_mode == "MA Crossover (Match Strategy Lab)"
+    # Strategy Parameters Defaults
+    ma_short_window = 50
+    ma_long_window = 60
+    rsi_period = 14
+    rsi_oversold = 30
+    rsi_overbought = 70
+    ema_short = 12
+    ema_long = 26
+    macd_fast = 12
+    macd_slow = 26
+    macd_signal = 9
+    breakout_window = 20
+    exit_window = 10
+    bb_period = 20
+    bb_std = 2.0
     
-    # MA Parameters (shown only for MA mode)
-    ma_short_window = None
-    ma_long_window = None
-    
-    if is_ma_mode:
-        st.info("📊 **MA Crossover Mode**: Uses the same Moving Average Crossover logic as Strategy Lab for consistency verification.")
+    if strategy_mode == "ma_crossover":
         col_ma1, col_ma2 = st.columns(2)
         with col_ma1:
-            ma_short_window = st.number_input(
-                "Short MA Window",
-                min_value=1,
-                max_value=200,
-                value=50,
-                key="auto_sim_hist_ma_short"
-            )
+            ma_short_window = st.number_input("Short MA Window", min_value=1, value=50, key="ash_ma_short")
         with col_ma2:
-            ma_long_window = st.number_input(
-                "Long MA Window",
-                min_value=2,
-                max_value=400,
-                value=60,
-                key="auto_sim_hist_ma_long"
-            )
-        
+            ma_long_window = st.number_input("Long MA Window", min_value=2, value=60, key="ash_ma_long")
         if ma_short_window >= ma_long_window:
             st.warning("⚠️ Short Window must be less than Long Window")
+            
+    elif strategy_mode == "rsi_mean_reversion":
+        col_rsi1, col_rsi2, col_rsi3 = st.columns(3)
+        with col_rsi1: rsi_period = st.number_input("RSI Period", min_value=2, value=14, key="ash_rsi_period")
+        with col_rsi2: rsi_oversold = st.number_input("Oversold", min_value=1, value=30, key="ash_rsi_os")
+        with col_rsi3: rsi_overbought = st.number_input("Overbought", min_value=51, value=70, key="ash_rsi_ob")
+        
+    elif strategy_mode == "ema_crossover":
+        col_ema1, col_ema2 = st.columns(2)
+        with col_ema1: ema_short = st.number_input("EMA Short", min_value=1, value=12, key="ash_ema_short")
+        with col_ema2: ema_long = st.number_input("EMA Long", min_value=1, value=26, key="ash_ema_long")
+        
+    elif strategy_mode == "macd":
+        col_m1, col_m2, col_m3 = st.columns(3)
+        with col_m1: macd_fast = st.number_input("MACD Fast", min_value=1, value=12, key="ash_macd_fast")
+        with col_m2: macd_slow = st.number_input("MACD Slow", min_value=1, value=26, key="ash_macd_slow")
+        with col_m3: macd_signal = st.number_input("MACD Signal", min_value=1, value=9, key="ash_macd_sig")
+        
+    elif strategy_mode == "breakout":
+        col_b1, col_b2 = st.columns(2)
+        with col_b1: breakout_window = st.number_input("Breakout Window", min_value=1, value=20, key="ash_bo_win")
+        with col_b2: exit_window = st.number_input("Exit Window", min_value=1, value=10, key="ash_ex_win")
+        
+    elif strategy_mode == "bollinger":
+        col_bb1, col_bb2 = st.columns(2)
+        with col_bb1: bb_period = st.number_input("BB Period", min_value=1, value=20, key="ash_bb_per")
+        with col_bb2: bb_std = st.number_input("BB Std Dev", min_value=0.1, value=2.0, step=0.1, key="ash_bb_std")
     
     st.markdown("---")
     
@@ -4183,13 +4259,11 @@ def render_auto_sim_historical():
     st.markdown("---")
     
     # Run Simulation
-    btn_label = "🚀 Run Historical Simulation"
-    if is_ma_mode:
-        btn_label = f"🚀 Run MA Crossover ({ma_short_window}/{ma_long_window})"
+    btn_label = f"🚀 Run {strategy_options[strategy_mode]}"
     
     if st.button(btn_label, type="primary", use_container_width=True, key="auto_sim_hist_run"):
         # Validation
-        if is_ma_mode and ma_short_window >= ma_long_window:
+        if strategy_mode == "ma_crossover" and ma_short_window >= ma_long_window:
             st.error("Short Window must be less than Long Window")
             return
         
@@ -4200,17 +4274,27 @@ def render_auto_sim_historical():
                     "timeframe": timeframe,
                     "initial_capital": initial_capital,
                     "risk_per_trade": risk_pct / 100.0,
-                    "strategy_mode": "ma_crossover" if is_ma_mode else "final_signal",
+                    "strategy_mode": strategy_mode,
                     "position_sizing_mode": pos_mode_value,
                     "execution_mode": execution_mode,
                     "commission_percent": commission_percent,
                     "slippage_percent": slippage_percent,
+                    # Strategy Params
+                    "ma_short_window": ma_short_window,
+                    "ma_long_window": ma_long_window,
+                    "rsi_period": rsi_period,
+                    "rsi_oversold": rsi_oversold,
+                    "rsi_overbought": rsi_overbought,
+                    "ema_short": ema_short,
+                    "ema_long": ema_long,
+                    "macd_fast": macd_fast,
+                    "macd_slow": macd_slow,
+                    "macd_signal": macd_signal,
+                    "breakout_window": breakout_window,
+                    "exit_window": exit_window,
+                    "bb_period": bb_period,
+                    "bb_std": bb_std,
                 }
-                
-                # Add MA params
-                if is_ma_mode:
-                    payload["ma_short_window"] = ma_short_window
-                    payload["ma_long_window"] = ma_long_window
                 
                 # Add position sizing params
                 if fixed_shares:
@@ -4248,7 +4332,7 @@ def render_auto_sim_historical():
                     st.session_state["auto_sim_hist_result"] = result
                     
                     # Show strategy info in success message
-                    strategy_info = "Final Signal" if not is_ma_mode else f"MA Crossover ({ma_short_window}/{ma_long_window})"
+                    strategy_info = strategy_options[strategy_mode]
                     
                     # Check if halted
                     if result.get("summary", {}).get("simulation_halted"):
@@ -4567,7 +4651,11 @@ def render_multi_symbol_sim():
         strategy_options = {
             "ma_crossover": "MA Crossover",
             "buy_and_hold": "Buy & Hold",
-            "rsi_mean_reversion": "RSI Mean Reversion"
+            "rsi_mean_reversion": "RSI Mean Reversion",
+            "ema_crossover": "EMA Crossover",
+            "macd": "MACD Signal Line",
+            "breakout": "Breakout Strategy",
+            "bollinger": "Bollinger Mean Reversion"
         }
         
         strategy_mode = st.selectbox(
@@ -4584,6 +4672,17 @@ def render_multi_symbol_sim():
         rsi_period = 14
         rsi_oversold = 30
         rsi_overbought = 70
+        
+        # New strategy params defaults
+        ema_short = 12
+        ema_long = 26
+        macd_fast = 12
+        macd_slow = 26
+        macd_signal = 9
+        breakout_window = 20
+        exit_window = 10
+        bb_period = 20
+        bb_std = 2.0
         
         if strategy_mode == "ma_crossover":
             # MA Strategy Presets
@@ -4673,6 +4772,23 @@ def render_multi_symbol_sim():
                 min_value=51, max_value=99, value=70,
                 key="multi_sim_rsi_overbought"
             )
+            
+        elif strategy_mode == "ema_crossover":
+            ema_short = st.number_input("EMA Short", min_value=1, value=12, key="ms_ema_short")
+            ema_long = st.number_input("EMA Long", min_value=1, value=26, key="ms_ema_long")
+            
+        elif strategy_mode == "macd":
+            macd_fast = st.number_input("MACD Fast", min_value=1, value=12, key="ms_macd_fast")
+            macd_slow = st.number_input("MACD Slow", min_value=1, value=26, key="ms_macd_slow")
+            macd_signal = st.number_input("MACD Signal", min_value=1, value=9, key="ms_macd_signal")
+            
+        elif strategy_mode == "breakout":
+            breakout_window = st.number_input("Breakout Window", min_value=1, value=20, key="ms_breakout_window")
+            exit_window = st.number_input("Exit Window", min_value=1, value=10, key="ms_exit_window")
+            
+        elif strategy_mode == "bollinger":
+            bb_period = st.number_input("BB Period", min_value=1, value=20, key="ms_bb_period")
+            bb_std = st.number_input("BB Std Dev", min_value=0.1, value=2.0, step=0.1, key="ms_bb_std")
         
         elif strategy_mode == "buy_and_hold":
             st.info("Buy & Hold has no configurable parameters. Buys on first bar and holds to end.")
@@ -4758,6 +4874,15 @@ def render_multi_symbol_sim():
                     "rsi_period": rsi_period,
                     "rsi_oversold": rsi_oversold,
                     "rsi_overbought": rsi_overbought,
+                    "ema_short": ema_short,
+                    "ema_long": ema_long,
+                    "macd_fast": macd_fast,
+                    "macd_slow": macd_slow,
+                    "macd_signal": macd_signal,
+                    "breakout_window": breakout_window,
+                    "exit_window": exit_window,
+                    "bb_period": bb_period,
+                    "bb_std": bb_std,
                     "execution_mode": execution_mode,
                     "position_sizing_mode": "full_equity",
                     "use_r_management": use_r_mgmt,
@@ -4920,7 +5045,7 @@ def _render_multi_sim_results(result: dict):
             "Total R": st.column_config.NumberColumn("Total R", format="%.2fR"),
             "Avg R": st.column_config.NumberColumn("Avg R", format="%.2fR"),
             "Win Rate %": st.column_config.NumberColumn("Win %", format="%.1f%%"),
-            "Max DD %": st.column_config.NumberColumn("Max DD", format="%.1f%%"),
+            "Max DD %": st.column_config.NumberColumn("Max DD", format="%.2f%%"),
             "Trades": st.column_config.NumberColumn("Trades"),
         }
     )
@@ -4983,6 +5108,11 @@ def _render_auto_sim_results(result: dict, key_suffix: str):
         st.error(f"⚠️ Simulation Error: {summary['error']}")
         return
     
+    # Calculate Max Drawdown from equity curve
+    max_dd = 0.0
+    if result.get('equity_curve'):
+        max_dd = max((e.get("drawdown", 0) for e in result['equity_curve']), default=0.0)
+
     # Summary Metrics with safe defaults
     col1, col2, col3, col4 = st.columns(4)
     with col1:
@@ -4990,16 +5120,18 @@ def _render_auto_sim_results(result: dict, key_suffix: str):
     with col2:
         st.metric("Total Return", f"{result.get('total_return_pct', 0):+.2f}%")
     with col3:
-        st.metric("Total Trades", summary.get('total_trades', 0))
+        st.metric("Max Drawdown", f"{max_dd:.2f}%")
     with col4:
         st.metric("Win Rate", f"{summary.get('win_rate', 0):.1f}%")
     
     col5, col6, col7, col8 = st.columns(4)
     with col5:
-        st.metric("Total PnL", f"${summary.get('total_pnl', 0):,.2f}")
+        st.metric("Total Trades", summary.get('total_trades', 0))
     with col6:
-        st.metric("Avg PnL", f"${summary.get('avg_pnl', 0):.2f}")
+        st.metric("Total PnL", f"${summary.get('total_pnl', 0):,.2f}")
     with col7:
+        st.metric("Avg PnL", f"${summary.get('avg_pnl', 0):.2f}")
+    with col8:
         st.metric("Best Trade", f"${summary.get('best_trade', 0):.2f}")
     with col8:
         st.metric("Worst Trade", f"${summary.get('worst_trade', 0):.2f}")

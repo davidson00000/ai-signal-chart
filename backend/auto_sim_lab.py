@@ -52,7 +52,16 @@ class AutoSimConfig(BaseModel):
     max_bars: Optional[int] = None    # Use last N bars if specified
     
     # Strategy Mode
-    strategy_mode: Literal["final_signal", "ma_crossover", "buy_and_hold", "rsi_mean_reversion"] = "final_signal"
+    strategy_mode: Literal[
+        "final_signal", 
+        "ma_crossover", 
+        "buy_and_hold", 
+        "rsi_mean_reversion",
+        "ema_crossover",
+        "macd",
+        "breakout",
+        "bollinger"
+    ] = "final_signal"
     
     # MA Crossover specific params
     ma_short_window: Optional[int] = None
@@ -62,6 +71,23 @@ class AutoSimConfig(BaseModel):
     rsi_period: int = 14
     rsi_oversold: int = 30
     rsi_overbought: int = 70
+    
+    # EMA Strategy params
+    ema_short: int = 12
+    ema_long: int = 26
+    
+    # MACD Strategy params
+    macd_fast: int = 12
+    macd_slow: int = 26
+    macd_signal: int = 9
+    
+    # Breakout Strategy params
+    breakout_window: int = 20
+    exit_window: int = 10
+    
+    # Bollinger Strategy params
+    bb_period: int = 20
+    bb_std: float = 2.0
     
     # Position Sizing Mode
     position_sizing_mode: Literal[
@@ -183,6 +209,10 @@ def generate_action_for_bar(
     - ma_crossover: Use MA Crossover strategy
     - buy_and_hold: Buy on first bar, hold forever
     - rsi_mean_reversion: Buy when RSI < oversold, sell when RSI > overbought
+    - ema_crossover: EMA Crossover
+    - macd: MACD Signal Line
+    - breakout: Breakout Strategy
+    - bollinger: Bollinger Mean Reversion
     
     Args:
         config: Simulation configuration
@@ -194,14 +224,35 @@ def generate_action_for_bar(
         - action: "buy" | "sell" | "hold"
         - raw_info: dict for DecisionLog
     """
-    if config.strategy_mode == "ma_crossover":
+    mode = config.strategy_mode
+    
+    if mode == "ma_crossover":
         return _generate_ma_crossover_action(config, df, idx)
-    elif config.strategy_mode == "buy_and_hold":
+    elif mode == "buy_and_hold":
         return _generate_buy_and_hold_action(config, df, idx)
-    elif config.strategy_mode == "rsi_mean_reversion":
+    elif mode == "rsi_mean_reversion":
         return _generate_rsi_action(config, df, idx)
-    else:
+    elif mode == "final_signal":
         return _generate_final_signal_action(config, df, idx)
+    
+    # New Strategies
+    # Convert config to dict for strategy init
+    config_dict = config.model_dump()
+    
+    if mode == "ema_crossover":
+        from backend.strategies.ema_crossover import EmaCrossoverStrategy
+        return EmaCrossoverStrategy(config_dict).generate_action(df, idx)
+    elif mode == "macd":
+        from backend.strategies.macd_strategy import MacdStrategy
+        return MacdStrategy(config_dict).generate_action(df, idx)
+    elif mode == "breakout":
+        from backend.strategies.breakout_strategy import BreakoutStrategy
+        return BreakoutStrategy(config_dict).generate_action(df, idx)
+    elif mode == "bollinger":
+        from backend.strategies.bollinger_strategy import BollingerStrategy
+        return BollingerStrategy(config_dict).generate_action(df, idx)
+        
+    return "hold", {"reason": f"Unknown strategy mode: {mode}"}
 
 
 def _generate_ma_crossover_action(
