@@ -4468,7 +4468,7 @@ def render_multi_symbol_sim():
         api_universes = {}
     
     # Build universe options - combine "Custom" with API universes
-    universe_options = {"custom": {"label": "Custom (手動入力)", "symbols": []}}
+    universe_options = {"custom": {"label": "Custom (手動入力)", "symbols": [], "description": "Manual symbol input"}}
     universe_options.update(api_universes)
     
     # Configuration
@@ -4481,58 +4481,68 @@ def render_multi_symbol_sim():
     # Default to mega_caps if available, else first option
     default_idx = universe_keys.index("mega_caps") if "mega_caps" in universe_keys else 0
     
-    # Get previous preset to detect changes
-    prev_preset = st.session_state.get("_prev_multi_sim_preset", None)
+    # Initialize session state for preset if not exists
+    if "_current_universe_preset" not in st.session_state:
+        st.session_state["_current_universe_preset"] = universe_keys[default_idx]
+        # Initialize symbols with default preset
+        default_symbols = universe_options.get("mega_caps", {}).get("symbols", ["AAPL", "MSFT", "GOOGL", "AMZN", "META", "NVDA", "TSLA"])
+        st.session_state["_multi_sim_symbols_list"] = default_symbols
+    
+    # Get current preset index
+    current_preset = st.session_state.get("_current_universe_preset", universe_keys[default_idx])
+    current_idx = universe_keys.index(current_preset) if current_preset in universe_keys else default_idx
     
     selected_idx = st.selectbox(
         "Universe Preset",
         options=range(len(universe_labels)),
         format_func=lambda i: universe_labels[i],
-        index=default_idx,
-        key="multi_sim_preset",
+        index=current_idx,
+        key="multi_sim_preset_select",
         help="Select a preset symbol list or choose 'Custom' for manual input"
     )
     
     selected_key = universe_keys[selected_idx]
     selected_universe = universe_options[selected_key]
     
-    # Update symbols when preset changes
-    if selected_key != prev_preset and selected_key != "custom":
-        preset_symbols = selected_universe.get("symbols", [])
-        if preset_symbols:
-            st.session_state["multi_sim_symbols_value"] = ", ".join(preset_symbols)
-    
-    # Store current preset for next comparison
-    st.session_state["_prev_multi_sim_preset"] = selected_key
-    
-    # Default value for symbols
-    default_symbols = universe_options.get("mega_caps", {}).get("symbols", ["AAPL", "MSFT", "GOOGL", "AMZN", "META", "NVDA", "TSLA"])
-    default_symbols_str = ", ".join(default_symbols)
+    # Detect preset change and update symbols
+    if selected_key != st.session_state.get("_current_universe_preset"):
+        st.session_state["_current_universe_preset"] = selected_key
+        if selected_key != "custom":
+            # Update symbols from preset
+            preset_symbols = selected_universe.get("symbols", [])
+            st.session_state["_multi_sim_symbols_list"] = preset_symbols
+            st.rerun()  # Force rerun to update the text area
     
     col1, col2 = st.columns(2)
     
     with col1:
-        # Symbol selection text area
-        current_symbols_value = st.session_state.get("multi_sim_symbols_value", default_symbols_str)
+        # Get current symbols
+        current_symbols_list = st.session_state.get("_multi_sim_symbols_list", [])
+        current_symbols_str = ", ".join(current_symbols_list)
         
-        # Show text area for custom or display current symbols
+        # Show text area - editable only in Custom mode
         is_custom = selected_key == "custom"
         
         symbols_input = st.text_area(
             "Symbols (comma-separated)",
-            value=current_symbols_value,
+            value=current_symbols_str,
             height=100,
-            key="multi_sim_symbols",
-            disabled=not is_custom and selected_key != "custom",
+            key="multi_sim_symbols_input",
+            disabled=not is_custom,
             help="Enter symbols separated by commas. Select 'Custom' to edit manually."
         )
         
-        # Update session state with current input
-        st.session_state["multi_sim_symbols_value"] = symbols_input
+        # Parse symbols from input
+        if is_custom:
+            # In custom mode, use the text input
+            symbols = [s.strip().upper() for s in symbols_input.split(",") if s.strip()]
+            st.session_state["_multi_sim_symbols_list"] = symbols
+        else:
+            # In preset mode, use the preset symbols
+            symbols = current_symbols_list
         
-        # Parse symbols
-        symbols = [s.strip().upper() for s in symbols_input.split(",") if s.strip()]
-        st.caption(f"📊 Selected: {len(symbols)} symbols")
+        # Display selected count with universe info
+        st.caption(f"📊 Selected: **{len(symbols)}** symbols")
         
         timeframe = st.selectbox(
             "Timeframe",
