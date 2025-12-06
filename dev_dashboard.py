@@ -4543,6 +4543,93 @@ def _render_auto_sim_results(result: dict, key_suffix: str):
             st.dataframe(log_df[display_cols], use_container_width=True, height=400)
         else:
             st.info("No events match the selected filter.")
+    
+    # R Analytics Panel (only show if r_analytics is present)
+    r_analytics = result.get('r_analytics')
+    if r_analytics:
+        st.markdown("---")
+        st.subheader("📐 R Analytics")
+        st.caption("R-based performance metrics (R = PnL / Risk Amount)")
+        
+        # Core R Metrics
+        col_r1, col_r2, col_r3, col_r4 = st.columns(4)
+        with col_r1:
+            st.metric("Total R", f"{r_analytics.get('total_r', 0):+.2f}R")
+        with col_r2:
+            st.metric("Avg R / Trade", f"{r_analytics.get('avg_r_per_trade', 0):+.2f}R")
+        with col_r3:
+            st.metric("Best R", f"{r_analytics.get('max_r', 0):+.2f}R")
+        with col_r4:
+            st.metric("Worst R", f"{r_analytics.get('min_r', 0):+.2f}R")
+        
+        col_r5, col_r6, col_r7, col_r8 = st.columns(4)
+        with col_r5:
+            win_rate = r_analytics.get('win_rate', 0) * 100
+            st.metric("Win Rate", f"{win_rate:.1f}%")
+        with col_r6:
+            st.metric("Trades (R)", r_analytics.get('trades_count', 0))
+        with col_r7:
+            st.metric("🔥 Max Win Streak", r_analytics.get('max_consecutive_wins', 0))
+        with col_r8:
+            st.metric("❄️ Max Loss Streak", r_analytics.get('max_consecutive_losses', 0))
+        
+        # R-Equity Curve
+        st.markdown("### R-Equity Curve")
+        st.caption("Cumulative R over trades (how many R's gained/lost over time)")
+        
+        r_equity_curve = r_analytics.get('r_equity_curve', [])
+        if r_equity_curve:
+            r_eq_df = pd.DataFrame({
+                'Trade #': list(range(1, len(r_equity_curve) + 1)),
+                'Cumulative R': r_equity_curve
+            })
+            
+            r_eq_chart = alt.Chart(r_eq_df).mark_line(
+                strokeWidth=2,
+                color="#9B59B6"  # Purple for R
+            ).encode(
+                x=alt.X('Trade #:Q', title='Trade Number'),
+                y=alt.Y('Cumulative R:Q', title='Cumulative R', scale=alt.Scale(zero=True))
+            ).properties(
+                height=250
+            )
+            
+            # Add zero line
+            zero_line = alt.Chart(pd.DataFrame({'y': [0]})).mark_rule(
+                strokeDash=[4, 4],
+                color='gray'
+            ).encode(y='y:Q')
+            
+            st.altair_chart(r_eq_chart + zero_line, use_container_width=True)
+        else:
+            st.info("No R-equity data available.")
+        
+        # R-Value Distribution Histogram
+        st.markdown("### R Distribution")
+        st.caption("Histogram of R values per trade")
+        
+        r_values = r_analytics.get('r_values', [])
+        if r_values:
+            import matplotlib.pyplot as plt
+            
+            fig, ax = plt.subplots(figsize=(8, 4))
+            ax.hist(r_values, bins=min(20, max(5, len(r_values) // 2)), 
+                    color='#3498DB', edgecolor='white', alpha=0.8)
+            ax.axvline(x=0, color='red', linestyle='--', linewidth=1, label='Breakeven (0R)')
+            ax.set_xlabel('R per Trade', fontsize=10)
+            ax.set_ylabel('Frequency', fontsize=10)
+            ax.set_title('R Distribution', fontsize=12)
+            ax.legend()
+            ax.grid(axis='y', alpha=0.3)
+            
+            # Color positive/negative areas
+            ax.axvspan(0, max(r_values) if r_values else 1, alpha=0.1, color='green')
+            ax.axvspan(min(r_values) if r_values else -1, 0, alpha=0.1, color='red')
+            
+            st.pyplot(fig)
+            plt.close(fig)
+        else:
+            st.info("No R-value data available.")
 
 
 # =============================================================================

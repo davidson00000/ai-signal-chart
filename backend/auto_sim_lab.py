@@ -34,6 +34,7 @@ from pydantic import BaseModel, Field, model_validator
 from backend import data_feed
 from backend.live.signal_generator import generate_live_signal
 from backend.models.decision_log import DecisionEvent, DecisionLog
+from backend.r_analytics import compute_r_analytics
 
 
 # =============================================================================
@@ -120,6 +121,7 @@ class AutoSimResult(BaseModel):
     decision_log: List[Dict[str, Any]]  # List of DecisionEvent dicts
     
     summary: Dict[str, Any]  # Performance summary stats
+    r_analytics: Optional[Dict[str, Any]] = None  # R-based analytics (when R management enabled)
 
 
 # =============================================================================
@@ -1147,6 +1149,13 @@ def run_auto_simulation(config: AutoSimConfig) -> AutoSimResult:
         summary["ma_short_window"] = config.ma_short_window
         summary["ma_long_window"] = config.ma_long_window
     
+    # Compute R Analytics (only if R management enabled and we have trades with R values)
+    r_analytics_dict = None
+    if config.use_r_management:
+        r_analytics = compute_r_analytics(trades)
+        if r_analytics:
+            r_analytics_dict = r_analytics.to_dict()
+    
     return AutoSimResult(
         symbol=config.symbol,
         timeframe=config.timeframe,
@@ -1156,5 +1165,6 @@ def run_auto_simulation(config: AutoSimConfig) -> AutoSimResult:
         equity_curve=equity_curve,
         trades=trades,
         decision_log=decision_log.to_list(),
-        summary=summary
+        summary=summary,
+        r_analytics=r_analytics_dict
     )
