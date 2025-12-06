@@ -3911,10 +3911,50 @@ def render_auto_sim_lab():
 def render_auto_sim_historical():
     """Render Historical (backtest) Auto Sim Lab UI."""
     st.markdown("""
-    **Historical Mode** uses the same signal generation logic as Live Signal (Stat, Rule, ML predictors)
-    to simulate automated trading on historical data. This helps evaluate how the current signal
-    model would have performed in the past.
+    **Historical Mode** simulates automated trading on historical data using your chosen strategy.
+    Select between **Final Signal** (using Live Signal predictors) or **MA Crossover** (matching Strategy Lab).
     """)
+    
+    st.markdown("---")
+    
+    # Strategy Mode Selection
+    st.subheader("🎯 Strategy Mode")
+    
+    strategy_mode = st.radio(
+        "Select Strategy",
+        ["Final Signal (Default)", "MA Crossover (Match Strategy Lab)"],
+        horizontal=True,
+        key="auto_sim_hist_strategy_mode"
+    )
+    
+    is_ma_mode = strategy_mode == "MA Crossover (Match Strategy Lab)"
+    
+    # MA Parameters (shown only for MA mode)
+    ma_short_window = None
+    ma_long_window = None
+    
+    if is_ma_mode:
+        st.info("📊 **MA Crossover Mode**: Uses the same Moving Average Crossover logic as Strategy Lab for consistency verification.")
+        col_ma1, col_ma2 = st.columns(2)
+        with col_ma1:
+            ma_short_window = st.number_input(
+                "Short MA Window",
+                min_value=1,
+                max_value=200,
+                value=50,
+                key="auto_sim_hist_ma_short"
+            )
+        with col_ma2:
+            ma_long_window = st.number_input(
+                "Long MA Window",
+                min_value=2,
+                max_value=400,
+                value=60,
+                key="auto_sim_hist_ma_long"
+            )
+        
+        if ma_short_window >= ma_long_window:
+            st.warning("⚠️ Short Window must be less than Long Window")
     
     st.markdown("---")
     
@@ -3941,15 +3981,64 @@ def render_auto_sim_historical():
             step=10000.0,
             key="auto_sim_hist_capital"
         )
+    
+    # Position Sizing Mode
+    st.markdown("---")
+    st.subheader("📐 Position Sizing")
+    
+    position_sizing_mode = st.selectbox(
+        "Position Sizing Mode",
+        ["Percent of Equity", "Full Equity", "Fixed Shares", "Fixed Dollar Amount"],
+        key="auto_sim_hist_pos_mode"
+    )
+    
+    # Map display names to API values
+    pos_mode_map = {
+        "Percent of Equity": "percent_of_equity",
+        "Full Equity": "full_equity",
+        "Fixed Shares": "fixed_shares",
+        "Fixed Dollar Amount": "fixed_dollar"
+    }
+    pos_mode_value = pos_mode_map[position_sizing_mode]
+    
+    # Show relevant inputs based on mode
+    risk_pct = 1.0
+    fixed_shares = None
+    fixed_dollar_amount = None
+    
+    if position_sizing_mode == "Percent of Equity":
         risk_pct = st.slider(
             "Risk per Trade (%)",
             min_value=0.5,
-            max_value=5.0,
+            max_value=10.0,
             value=1.0,
             step=0.5,
-            key="auto_sim_hist_risk"
+            key="auto_sim_hist_risk",
+            help="Percentage of equity to risk per trade"
+        )
+    elif position_sizing_mode == "Full Equity":
+        st.caption("Uses 100% of available equity for each trade (maximum position size).")
+    elif position_sizing_mode == "Fixed Shares":
+        fixed_shares = st.number_input(
+            "Number of Shares",
+            min_value=1,
+            max_value=10000,
+            value=100,
+            key="auto_sim_hist_fixed_shares"
+        )
+    elif position_sizing_mode == "Fixed Dollar Amount":
+        fixed_dollar_amount = st.number_input(
+            "Dollar Amount ($)",
+            min_value=100.0,
+            max_value=1000000.0,
+            value=10000.0,
+            step=1000.0,
+            key="auto_sim_hist_fixed_dollar"
         )
     
+    st.markdown("---")
+    
+    # Date Range / Max Bars
     col3, col4 = st.columns(2)
     with col3:
         use_date_range = st.checkbox("Use Date Range", value=False, key="auto_sim_hist_use_date")
@@ -3973,7 +4062,16 @@ def render_auto_sim_historical():
     st.markdown("---")
     
     # Run Simulation
-    if st.button("🚀 Run Historical Simulation", type="primary", use_container_width=True, key="auto_sim_hist_run"):
+    btn_label = "🚀 Run Historical Simulation"
+    if is_ma_mode:
+        btn_label = f"🚀 Run MA Crossover ({ma_short_window}/{ma_long_window})"
+    
+    if st.button(btn_label, type="primary", use_container_width=True, key="auto_sim_hist_run"):
+        # Validation
+        if is_ma_mode and ma_short_window >= ma_long_window:
+            st.error("Short Window must be less than Long Window")
+            return
+        
         with st.spinner("Running simulation... This may take a moment."):
             try:
                 payload = {
@@ -3981,8 +4079,22 @@ def render_auto_sim_historical():
                     "timeframe": timeframe,
                     "initial_capital": initial_capital,
                     "risk_per_trade": risk_pct / 100.0,
+                    "strategy_mode": "ma_crossover" if is_ma_mode else "final_signal",
+                    "position_sizing_mode": pos_mode_value,
                 }
                 
+                # Add MA params
+                if is_ma_mode:
+                    payload["ma_short_window"] = ma_short_window
+                    payload["ma_long_window"] = ma_long_window
+                
+                # Add position sizing params
+                if fixed_shares:
+                    payload["fixed_shares"] = fixed_shares
+                if fixed_dollar_amount:
+                    payload["fixed_dollar_amount"] = fixed_dollar_amount
+                
+                # Add date range
                 if use_date_range and start_date and end_date:
                     payload["start_date"] = start_date.isoformat()
                     payload["end_date"] = end_date.isoformat()
@@ -3995,7 +4107,10 @@ def render_auto_sim_historical():
                 if response.status_code == 200:
                     result = response.json()
                     st.session_state["auto_sim_hist_result"] = result
-                    st.success(f"Simulation complete! Final Equity: ${result['final_equity']:,.2f}")
+                    
+                    # Show strategy info in success message
+                    strategy_info = "Final Signal" if not is_ma_mode else f"MA Crossover ({ma_short_window}/{ma_long_window})"
+                    st.success(f"✅ Simulation complete! [{strategy_info}] Final Equity: ${result['final_equity']:,.2f} ({result['total_return_pct']:+.2f}%)")
                 else:
                     st.error(f"Simulation failed: {response.text}")
             except Exception as e:
