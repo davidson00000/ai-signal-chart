@@ -4660,26 +4660,9 @@ def _render_multi_sim_results(result: dict):
         "error": "Error"
     })
     
-    # Apply conditional formatting
-    def highlight_row(row):
-        if row.get("Error") and pd.notna(row.get("Error")):
-            return ["background-color: #ffcccc"] * len(row)
-        
-        total_r = row.get("Total R")
-        if pd.notna(total_r):
-            if total_r > 5:
-                return ["background-color: #ccffcc"] * len(row)
-            elif total_r > 0:
-                return ["background-color: #e6ffe6"] * len(row)
-            elif total_r < -5:
-                return ["background-color: #ffcccc"] * len(row)
-        return [""] * len(row)
-    
-    styled_df = df_display.style.apply(highlight_row, axis=1)
-    
-    # Display table
+    # Display table (no conditional formatting for dark mode compatibility)
     st.dataframe(
-        styled_df,
+        df_display,
         use_container_width=True,
         hide_index=True,
         column_config={
