@@ -59,6 +59,9 @@ class DecisionEvent(BaseModel):
     current_drawdown: Optional[float] = None
     daily_r_loss: Optional[float] = None
     
+    # Trade linking
+    trade_id: Optional[int] = None  # Links event to specific trade (1, 2, 3, ...)
+    
     # Human-readable reason
     reason: str = Field(..., description="Human-readable explanation of the decision")
     

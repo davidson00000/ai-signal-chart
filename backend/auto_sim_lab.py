@@ -714,6 +714,10 @@ def run_auto_simulation(config: AutoSimConfig) -> AutoSimResult:
     halt_reason = None
     daily_r_tracker: Dict[str, float] = {}  # date_str -> cumulative R
     
+    # Trade ID tracking
+    next_trade_id = 1
+    current_trade_id: Optional[int] = None  # Set when trade is opened
+    
     # Pending order state (for next_bar_open execution)
     pending_action = None  # "buy" or "sell"
     pending_signal_idx = None
@@ -748,6 +752,10 @@ def run_auto_simulation(config: AutoSimConfig) -> AutoSimResult:
                     position_side = "long"
                     entry_price = exec_price
                     entry_time = bar_time
+                    
+                    # Assign trade ID
+                    current_trade_id = next_trade_id
+                    next_trade_id += 1
                     
                     # R-management
                     if config.use_r_management:
@@ -784,6 +792,7 @@ def run_auto_simulation(config: AutoSimConfig) -> AutoSimResult:
                         equity_before=equity,
                         equity_after=equity,
                         risk_per_trade=config.risk_per_trade,
+                        trade_id=current_trade_id,
                         reason=f"Enter LONG @ ${entry_price:.2f}, size={position_size} shares {sizing_info}"
                     ))
                     
@@ -808,6 +817,7 @@ def run_auto_simulation(config: AutoSimConfig) -> AutoSimResult:
                 equity += pnl
                 
                 trades.append({
+                    "trade_id": current_trade_id,
                     "entry_time": entry_time.isoformat() if hasattr(entry_time, 'isoformat') else str(entry_time),
                     "exit_time": bar_time.isoformat() if hasattr(bar_time, 'isoformat') else str(bar_time),
                     "entry_price": entry_price,
@@ -841,16 +851,19 @@ def run_auto_simulation(config: AutoSimConfig) -> AutoSimResult:
                     equity_after=equity,
                     risk_per_trade=config.risk_per_trade,
                     daily_r_loss=daily_r_tracker.get(bar_date),
+                    trade_id=current_trade_id,
                     reason=f"Exit LONG @ ${exec_price:.2f}. PnL: ${pnl:+.2f} ({(exec_price/entry_price-1)*100:+.2f}%)"
                           + (f" [R: {r_value:+.2f}]" if r_value is not None else "")
                 ))
                 
+                # Clear trade state
                 position_side = "flat"
                 position_size = 0
                 entry_price = 0.0
                 entry_time = None
                 entry_stop_price = 0.0
                 entry_risk_amount = 0.0
+                current_trade_id = None  # Clear trade ID
             
             pending_action = None
             pending_signal_idx = None
@@ -933,6 +946,7 @@ def run_auto_simulation(config: AutoSimConfig) -> AutoSimResult:
             equity_before=current_equity,
             equity_after=current_equity,
             risk_per_trade=config.risk_per_trade,
+            trade_id=current_trade_id,  # Link to current trade if in position
             reason=reason
         ))
         
@@ -956,6 +970,10 @@ def run_auto_simulation(config: AutoSimConfig) -> AutoSimResult:
                     position_side = "long"
                     entry_price = exec_price
                     entry_time = bar_time
+                    
+                    # Assign trade ID
+                    current_trade_id = next_trade_id
+                    next_trade_id += 1
                     
                     # R-management
                     if config.use_r_management:
@@ -992,6 +1010,7 @@ def run_auto_simulation(config: AutoSimConfig) -> AutoSimResult:
                         equity_before=equity_before,
                         equity_after=equity_before,
                         risk_per_trade=config.risk_per_trade,
+                        trade_id=current_trade_id,
                         reason=f"Enter LONG @ ${entry_price:.2f}, size={position_size} shares {sizing_info}"
                     ))
             
@@ -1015,6 +1034,7 @@ def run_auto_simulation(config: AutoSimConfig) -> AutoSimResult:
                 equity += pnl
                 
                 trades.append({
+                    "trade_id": current_trade_id,
                     "entry_time": entry_time.isoformat() if hasattr(entry_time, 'isoformat') else str(entry_time),
                     "exit_time": bar_time.isoformat() if hasattr(bar_time, 'isoformat') else str(bar_time),
                     "entry_price": entry_price,
@@ -1048,16 +1068,19 @@ def run_auto_simulation(config: AutoSimConfig) -> AutoSimResult:
                     equity_after=equity,
                     risk_per_trade=config.risk_per_trade,
                     daily_r_loss=daily_r_tracker.get(bar_date),
+                    trade_id=current_trade_id,
                     reason=f"Exit LONG @ ${exec_price:.2f}. PnL: ${pnl:+.2f} ({(exec_price/entry_price-1)*100:+.2f}%)"
                           + (f" [R: {r_value:+.2f}]" if r_value is not None else "")
                 ))
                 
+                # Clear trade state
                 position_side = "flat"
                 position_size = 0
                 entry_price = 0.0
                 entry_time = None
                 entry_stop_price = 0.0
                 entry_risk_amount = 0.0
+                current_trade_id = None  # Clear trade ID
         
         else:  # next_bar_open
             # Queue action for next bar

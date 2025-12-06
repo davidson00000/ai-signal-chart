@@ -4512,12 +4512,149 @@ def _render_auto_sim_results(result: dict, key_suffix: str):
             trades_df,
             use_container_width=True,
             column_config={
+                "trade_id": st.column_config.NumberColumn("ID"),
                 "pnl": st.column_config.NumberColumn("PnL ($)", format="$%.2f"),
                 "return_pct": st.column_config.NumberColumn("Return (%)", format="%.2f%%"),
                 "entry_price": st.column_config.NumberColumn("Entry", format="$%.2f"),
                 "exit_price": st.column_config.NumberColumn("Exit", format="$%.2f"),
+                "r_value": st.column_config.NumberColumn("R", format="%.2fR"),
             }
         )
+        
+        # Trade Inspector
+        st.markdown("---")
+        st.subheader("🔍 Trade Inspector")
+        st.caption("Select a trade to view detailed breakdown")
+        
+        if "trade_id" in trades_df.columns:
+            trade_ids = trades_df["trade_id"].tolist()
+            selected_trade_id = st.selectbox(
+                "Select Trade",
+                options=trade_ids,
+                index=len(trade_ids) - 1,  # Default to last trade
+                format_func=lambda x: f"Trade #{x}",
+                key=f"trade_inspector_{key_suffix}"
+            )
+            
+            # Get selected trade
+            selected_trade = trades_df.loc[trades_df["trade_id"] == selected_trade_id].iloc[0].to_dict()
+            
+            # Trade Summary Card
+            st.markdown("### 📄 Trade Summary")
+            col_t1, col_t2, col_t3 = st.columns(3)
+            
+            with col_t1:
+                st.metric("Trade ID", f"#{selected_trade.get('trade_id', 'N/A')}")
+                st.metric("Entry Price", f"${selected_trade.get('entry_price', 0):.2f}")
+                st.metric("Exit Price", f"${selected_trade.get('exit_price', 0):.2f}")
+            
+            with col_t2:
+                pnl = selected_trade.get('pnl', 0)
+                pnl_color = "🟢" if pnl > 0 else "🔴" if pnl < 0 else "⚪"
+                st.metric(f"{pnl_color} PnL ($)", f"${pnl:+.2f}")
+                
+                r_value = selected_trade.get('r_value')
+                if r_value is not None:
+                    r_color = "🟢" if r_value > 0 else "🔴" if r_value < 0 else "⚪"
+                    st.metric(f"{r_color} PnL (R)", f"{r_value:+.2f}R")
+                else:
+                    st.metric("PnL (R)", "N/A")
+                
+                st.metric("Size", f"{selected_trade.get('size', 0)} shares")
+            
+            with col_t3:
+                st.metric("Return (%)", f"{selected_trade.get('return_pct', 0):+.2f}%")
+                st.metric("Execution", selected_trade.get('execution_mode', 'N/A'))
+                
+                # Calculate holding period
+                entry_time = selected_trade.get('entry_time')
+                exit_time = selected_trade.get('exit_time')
+                if entry_time and exit_time:
+                    try:
+                        holding = pd.to_datetime(exit_time) - pd.to_datetime(entry_time)
+                        st.metric("Holding Period", str(holding))
+                    except:
+                        st.metric("Holding Period", "N/A")
+            
+            # R-Management details (if available)
+            if selected_trade.get('stop_price') is not None:
+                st.markdown("### 📊 R-Management Details")
+                col_r1, col_r2, col_r3 = st.columns(3)
+                with col_r1:
+                    st.metric("Virtual Stop", f"${selected_trade.get('stop_price', 0):.2f}")
+                with col_r2:
+                    st.metric("Risk Amount (1R)", f"${selected_trade.get('risk_amount', 0):.2f}")
+                with col_r3:
+                    if r_value is not None:
+                        st.metric("Result", f"{r_value:+.2f}R")
+            
+            # Decision Log for this trade
+            st.markdown("### 📜 Decision Log for This Trade")
+            decision_log = result.get("decision_log", []) or []
+            
+            # Filter events by trade_id
+            trade_events = [e for e in decision_log if e.get("trade_id") == selected_trade_id]
+            
+            # Fallback: time-based filtering if no trade_id matches
+            if not trade_events and entry_time and exit_time:
+                try:
+                    entry_dt = pd.to_datetime(entry_time)
+                    exit_dt = pd.to_datetime(exit_time)
+                    trade_events = [
+                        e for e in decision_log
+                        if entry_dt <= pd.to_datetime(e.get("timestamp")) <= exit_dt
+                    ]
+                except:
+                    pass
+            
+            if trade_events:
+                events_df = pd.DataFrame(trade_events)
+                
+                # Select columns to display
+                display_cols = ["timestamp", "event_type", "final_signal", "price", "reason"]
+                display_cols = [c for c in display_cols if c in events_df.columns]
+                
+                # Sort by timestamp
+                if "timestamp" in events_df.columns:
+                    events_df = events_df.sort_values("timestamp")
+                
+                st.dataframe(
+                    events_df[display_cols],
+                    use_container_width=True,
+                    hide_index=True
+                )
+                
+                # Signal Breakdown (from entry event)
+                entry_event = None
+                for e in trade_events:
+                    if e.get("event_type") == "entry":
+                        entry_event = e
+                        break
+                
+                if entry_event is None:
+                    for e in trade_events:
+                        if e.get("event_type") == "signal_decision" and e.get("final_signal") in ["buy", "strong_buy"]:
+                            entry_event = e
+                            break
+                
+                if entry_event:
+                    raw_signals = entry_event.get("raw_signals")
+                    if raw_signals and isinstance(raw_signals, dict):
+                        st.markdown("### 🧠 Signal Breakdown (at Entry)")
+                        
+                        # Display available signal components
+                        signal_cols = st.columns(4)
+                        col_idx = 0
+                        
+                        for key, value in raw_signals.items():
+                            if key not in ["reason", "features", "raw_signals"] and value is not None:
+                                with signal_cols[col_idx % 4]:
+                                    st.metric(key.replace("_", " ").title(), str(value))
+                                col_idx += 1
+            else:
+                st.info("No Decision Log events linked to this trade.")
+        else:
+            st.info("Trade IDs not available. Run a new simulation to enable Trade Inspector.")
     else:
         st.info("No trades executed during simulation.")
     
