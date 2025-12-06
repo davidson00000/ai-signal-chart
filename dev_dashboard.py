@@ -4038,6 +4038,124 @@ def render_auto_sim_historical():
     
     st.markdown("---")
     
+    # R-Management Panel
+    st.subheader("📊 R-Management (Optional)")
+    
+    use_r_management = st.checkbox(
+        "Enable R-Management",
+        value=False,
+        key="auto_sim_hist_use_r",
+        help="Track trades in R (risk) multiples using virtual stops"
+    )
+    
+    virtual_stop_method = "percent"
+    virtual_stop_atr_multiplier = 2.0
+    virtual_stop_percent = 0.03
+    
+    if use_r_management:
+        col_r1, col_r2 = st.columns(2)
+        with col_r1:
+            virtual_stop_method = st.selectbox(
+                "Virtual Stop Method",
+                ["percent", "atr"],
+                key="auto_sim_hist_stop_method",
+                help="How to calculate the virtual stop for R calculation"
+            )
+        
+        with col_r2:
+            if virtual_stop_method == "atr":
+                virtual_stop_atr_multiplier = st.number_input(
+                    "ATR Multiplier",
+                    min_value=0.5,
+                    max_value=10.0,
+                    value=2.0,
+                    step=0.5,
+                    key="auto_sim_hist_atr_mult",
+                    help="Stop = Entry - (ATR × Multiplier)"
+                )
+            else:
+                virtual_stop_percent = st.number_input(
+                    "Stop Percent (%)",
+                    min_value=0.5,
+                    max_value=20.0,
+                    value=3.0,
+                    step=0.5,
+                    key="auto_sim_hist_stop_pct",
+                    help="Stop = Entry × (1 - Stop%)"
+                ) / 100.0
+    
+    st.markdown("---")
+    
+    # Execution Mode Panel
+    st.subheader("⚡ Execution Mode")
+    
+    col_ex1, col_ex2, col_ex3 = st.columns(3)
+    with col_ex1:
+        execution_mode = st.selectbox(
+            "Execution Mode",
+            ["same_bar_close", "next_bar_open"],
+            key="auto_sim_hist_exec_mode",
+            help="same_bar_close = execute at signal bar close. next_bar_open = execute at next bar open (more realistic)"
+        )
+    
+    with col_ex2:
+        commission_percent = st.number_input(
+            "Commission (%)",
+            min_value=0.0,
+            max_value=1.0,
+            value=0.0,
+            step=0.01,
+            key="auto_sim_hist_commission",
+            help="Commission as percentage of trade value"
+        ) / 100.0
+    
+    with col_ex3:
+        slippage_percent = st.number_input(
+            "Slippage (%)",
+            min_value=0.0,
+            max_value=1.0,
+            value=0.0,
+            step=0.01,
+            key="auto_sim_hist_slippage",
+            help="Slippage as percentage of trade price"
+        ) / 100.0
+    
+    st.markdown("---")
+    
+    # Loss Control Panel
+    st.subheader("🛡️ Loss Control (Optional)")
+    
+    col_lc1, col_lc2 = st.columns(2)
+    with col_lc1:
+        use_max_dd = st.checkbox("Enable Max Drawdown Limit", value=False, key="auto_sim_hist_use_max_dd")
+        max_drawdown_percent = None
+        if use_max_dd:
+            max_drawdown_percent = st.number_input(
+                "Max Drawdown (%)",
+                min_value=1.0,
+                max_value=100.0,
+                value=20.0,
+                step=1.0,
+                key="auto_sim_hist_max_dd",
+                help="Halt simulation if drawdown exceeds this percentage"
+            ) / 100.0
+    
+    with col_lc2:
+        use_max_daily_r = st.checkbox("Enable Max Daily Loss (R)", value=False, key="auto_sim_hist_use_daily_r")
+        max_daily_loss_r = None
+        if use_max_daily_r:
+            max_daily_loss_r = st.number_input(
+                "Max Daily Loss (R)",
+                min_value=0.5,
+                max_value=10.0,
+                value=3.0,
+                step=0.5,
+                key="auto_sim_hist_max_daily_r",
+                help="Stop trading for the day if cumulative R loss exceeds this"
+            )
+    
+    st.markdown("---")
+    
     # Date Range / Max Bars
     col3, col4 = st.columns(2)
     with col3:
@@ -4081,6 +4199,9 @@ def render_auto_sim_historical():
                     "risk_per_trade": risk_pct / 100.0,
                     "strategy_mode": "ma_crossover" if is_ma_mode else "final_signal",
                     "position_sizing_mode": pos_mode_value,
+                    "execution_mode": execution_mode,
+                    "commission_percent": commission_percent,
+                    "slippage_percent": slippage_percent,
                 }
                 
                 # Add MA params
@@ -4093,6 +4214,21 @@ def render_auto_sim_historical():
                     payload["fixed_shares"] = fixed_shares
                 if fixed_dollar_amount:
                     payload["fixed_dollar_amount"] = fixed_dollar_amount
+                
+                # Add R-management params
+                if use_r_management:
+                    payload["use_r_management"] = True
+                    payload["virtual_stop_method"] = virtual_stop_method
+                    if virtual_stop_method == "atr":
+                        payload["virtual_stop_atr_multiplier"] = virtual_stop_atr_multiplier
+                    else:
+                        payload["virtual_stop_percent"] = virtual_stop_percent
+                
+                # Add loss control params
+                if max_drawdown_percent is not None:
+                    payload["max_drawdown_percent"] = max_drawdown_percent
+                if max_daily_loss_r is not None:
+                    payload["max_daily_loss_r"] = max_daily_loss_r
                 
                 # Add date range
                 if use_date_range and start_date and end_date:
@@ -4110,6 +4246,12 @@ def render_auto_sim_historical():
                     
                     # Show strategy info in success message
                     strategy_info = "Final Signal" if not is_ma_mode else f"MA Crossover ({ma_short_window}/{ma_long_window})"
+                    
+                    # Check if halted
+                    if result.get("summary", {}).get("simulation_halted"):
+                        halt_reason = result["summary"].get("halt_reason", "Unknown")
+                        st.warning(f"⚠️ Simulation halted: {halt_reason}")
+                    
                     st.success(f"✅ Simulation complete! [{strategy_info}] Final Equity: ${result['final_equity']:,.2f} ({result['total_return_pct']:+.2f}%)")
                 else:
                     st.error(f"Simulation failed: {response.text}")

@@ -8,6 +8,9 @@ to make trading decisions.
 Key features:
 - Uses existing signal generator (Stat, Rule, ML predictors) OR MA Crossover strategy
 - Simulates paper trading with configurable risk management and position sizing
+- R-based risk management with virtual stops
+- Execution modes (same_bar_close / next_bar_open)
+- Loss control (max drawdown, max daily loss)
 - Records detailed Decision Log for each bar
 - Returns equity curve, trades, and decision log
 
@@ -64,6 +67,22 @@ class AutoSimConfig(BaseModel):
     
     fixed_shares: Optional[int] = None
     fixed_dollar_amount: Optional[float] = None
+    
+    # R-Management
+    use_r_management: bool = False
+    virtual_stop_method: Literal["atr", "percent"] = "percent"
+    virtual_stop_atr_multiplier: float = 2.0
+    virtual_stop_percent: float = 0.03  # 3%
+    record_r_values: bool = True
+    
+    # Execution Mode
+    execution_mode: Literal["same_bar_close", "next_bar_open"] = "same_bar_close"
+    commission_percent: float = 0.0
+    slippage_percent: float = 0.0
+    
+    # Loss Control
+    max_drawdown_percent: Optional[float] = None
+    max_daily_loss_r: Optional[float] = None
     
     @model_validator(mode='after')
     def validate_config(self):
@@ -339,6 +358,60 @@ def _generate_final_signal_action(
 
 
 # =============================================================================
+# ATR Calculation
+# =============================================================================
+
+def calculate_atr(df: pd.DataFrame, period: int = 14) -> float:
+    """Calculate Average True Range (ATR) for the given DataFrame."""
+    if len(df) < period + 1:
+        return 0.0
+    
+    high = df['high'].values
+    low = df['low'].values
+    close = df['close'].values
+    
+    tr_list = []
+    for i in range(1, len(df)):
+        hl = high[i] - low[i]
+        hc = abs(high[i] - close[i-1])
+        lc = abs(low[i] - close[i-1])
+        tr_list.append(max(hl, hc, lc))
+    
+    if len(tr_list) < period:
+        return np.mean(tr_list) if tr_list else 0.0
+    
+    return np.mean(tr_list[-period:])
+
+
+# =============================================================================
+# Virtual Stop Calculation
+# =============================================================================
+
+def calculate_virtual_stop(
+    entry_price: float,
+    atr_value: float,
+    config: AutoSimConfig
+) -> float:
+    """
+    Calculate virtual stop price for R-management.
+    
+    Args:
+        entry_price: Entry price
+        atr_value: Current ATR value
+        config: Simulation configuration
+        
+    Returns:
+        Virtual stop price
+    """
+    if config.virtual_stop_method == "atr":
+        stop = entry_price - (atr_value * config.virtual_stop_atr_multiplier)
+    else:  # percent
+        stop = entry_price * (1 - config.virtual_stop_percent)
+    
+    return max(stop, 0.01)  # Ensure positive
+
+
+# =============================================================================
 # Position Sizing
 # =============================================================================
 
@@ -377,6 +450,39 @@ def calculate_position_size(
         raise ValueError(f"Unknown position sizing mode: {config.position_sizing_mode}")
     
     return max(size, 0)
+
+
+# =============================================================================
+# Execution Price Calculation
+# =============================================================================
+
+def calculate_execution_price(
+    raw_price: float,
+    is_buy: bool,
+    config: AutoSimConfig
+) -> Tuple[float, float, float]:
+    """
+    Calculate execution price with commission and slippage.
+    
+    Args:
+        raw_price: Raw order price
+        is_buy: True for buy, False for sell
+        config: Simulation configuration
+        
+    Returns:
+        Tuple of (execution_price, commission, slippage)
+    """
+    slippage = raw_price * config.slippage_percent
+    commission = raw_price * config.commission_percent
+    
+    if is_buy:
+        # Buy: price goes up with slippage
+        execution_price = raw_price * (1 + config.slippage_percent)
+    else:
+        # Sell: price goes down with slippage
+        execution_price = raw_price * (1 - config.slippage_percent)
+    
+    return execution_price, commission, slippage
 
 
 # =============================================================================
@@ -486,6 +592,11 @@ def run_auto_simulation(config: AutoSimConfig) -> AutoSimResult:
     - final_signal: Uses Live Signal predictors (default)
     - ma_crossover: Uses Moving Average Crossover
     
+    Enhanced features:
+    - R-management with virtual stops
+    - Execution modes (same_bar_close / next_bar_open)
+    - Loss control (max drawdown, max daily loss)
+    
     Trading Rules (Long-only, simplified):
     - BUY signal + flat position -> Enter long
     - SELL signal + long position -> Exit long
@@ -583,20 +694,164 @@ def run_auto_simulation(config: AutoSimConfig) -> AutoSimResult:
     
     # 2. Initialize Simulation State
     equity = config.initial_capital
+    peak_equity = config.initial_capital
     position_side = "flat"  # "flat" or "long"
     position_size = 0
     entry_price = 0.0
     entry_time = None
+    entry_stop_price = 0.0
+    entry_risk_amount = 0.0
+    entry_atr = 0.0
     
     equity_curve = []
     trades = []
     decision_log = DecisionLog()
     
+    # Loss control state
+    simulation_halted = False
+    halt_reason = None
+    daily_r_tracker: Dict[str, float] = {}  # date_str -> cumulative R
+    
+    # Pending order state (for next_bar_open execution)
+    pending_action = None  # "buy" or "sell"
+    pending_signal_idx = None
+    
     # 3. Loop Through Bars
     for i in range(warmup, len(df)):
+        if simulation_halted:
+            break
+            
         bar = df.iloc[i]
         bar_time = bar["timestamp"]
+        bar_date = bar_time.strftime("%Y-%m-%d") if hasattr(bar_time, 'strftime') else str(bar_time)[:10]
         close_price = float(bar["close"])
+        open_price = float(bar["open"]) if "open" in bar else close_price
+        
+        # Calculate ATR for R-management
+        current_atr = 0.0
+        if config.use_r_management:
+            df_slice = df.iloc[:i+1]
+            current_atr = calculate_atr(df_slice)
+        
+        # Handle pending order (for next_bar_open execution)
+        if pending_action and config.execution_mode == "next_bar_open":
+            if pending_action == "buy" and position_side == "flat":
+                # Execute pending buy at open
+                raw_price = open_price
+                exec_price, commission, slippage = calculate_execution_price(raw_price, True, config)
+                
+                position_size = calculate_position_size(equity, exec_price, config)
+                
+                if position_size > 0:
+                    position_side = "long"
+                    entry_price = exec_price
+                    entry_time = bar_time
+                    
+                    # R-management
+                    if config.use_r_management:
+                        entry_atr = current_atr
+                        entry_stop_price = calculate_virtual_stop(entry_price, entry_atr, config)
+                        entry_risk_amount = (entry_price - entry_stop_price) * position_size
+                    
+                    # Build sizing info
+                    if config.position_sizing_mode == "percent_of_equity":
+                        sizing_info = f"({config.risk_per_trade*100:.1f}% of equity)"
+                    elif config.position_sizing_mode == "full_equity":
+                        sizing_info = "(full equity)"
+                    elif config.position_sizing_mode == "fixed_shares":
+                        sizing_info = f"(fixed {config.fixed_shares} shares)"
+                    else:
+                        sizing_info = f"(fixed ${config.fixed_dollar_amount:.0f})"
+                    
+                    decision_log.add(DecisionEvent(
+                        timestamp=bar_time,
+                        symbol=config.symbol,
+                        timeframe=config.timeframe,
+                        event_type="entry",
+                        final_signal="buy",
+                        position_side="long",
+                        position_size=position_size,
+                        price=entry_price,
+                        execution_price=exec_price,
+                        execution_mode="next_bar_open",
+                        commission=commission,
+                        slippage=slippage,
+                        atr_value=entry_atr if config.use_r_management else None,
+                        stop_price=entry_stop_price if config.use_r_management else None,
+                        risk_amount=entry_risk_amount if config.use_r_management else None,
+                        equity_before=equity,
+                        equity_after=equity,
+                        risk_per_trade=config.risk_per_trade,
+                        reason=f"Enter LONG @ ${entry_price:.2f}, size={position_size} shares {sizing_info}"
+                    ))
+                    
+            elif pending_action == "sell" and position_side == "long":
+                # Execute pending sell at open
+                raw_price = open_price
+                exec_price, commission, slippage = calculate_execution_price(raw_price, False, config)
+                
+                pnl = (exec_price - entry_price) * position_size
+                
+                # Calculate R-value
+                r_value = None
+                if config.use_r_management and entry_risk_amount > 0:
+                    r_value = pnl / entry_risk_amount
+                    
+                    # Track daily R
+                    if bar_date not in daily_r_tracker:
+                        daily_r_tracker[bar_date] = 0.0
+                    daily_r_tracker[bar_date] += r_value
+                
+                equity_before = equity
+                equity += pnl
+                
+                trades.append({
+                    "entry_time": entry_time.isoformat() if hasattr(entry_time, 'isoformat') else str(entry_time),
+                    "exit_time": bar_time.isoformat() if hasattr(bar_time, 'isoformat') else str(bar_time),
+                    "entry_price": entry_price,
+                    "exit_price": exec_price,
+                    "size": position_size,
+                    "pnl": round(pnl, 2),
+                    "return_pct": round((exec_price / entry_price - 1) * 100, 2),
+                    "r_value": round(r_value, 2) if r_value is not None else None,
+                    "stop_price": entry_stop_price if config.use_r_management else None,
+                    "risk_amount": round(entry_risk_amount, 2) if config.use_r_management else None,
+                    "execution_mode": "next_bar_open"
+                })
+                
+                decision_log.add(DecisionEvent(
+                    timestamp=bar_time,
+                    symbol=config.symbol,
+                    timeframe=config.timeframe,
+                    event_type="exit",
+                    final_signal="sell",
+                    position_side="flat",
+                    position_size=position_size,
+                    price=exec_price,
+                    execution_price=exec_price,
+                    execution_mode="next_bar_open",
+                    commission=commission,
+                    slippage=slippage,
+                    r_value=r_value,
+                    stop_price=entry_stop_price if config.use_r_management else None,
+                    risk_amount=entry_risk_amount if config.use_r_management else None,
+                    equity_before=equity_before,
+                    equity_after=equity,
+                    risk_per_trade=config.risk_per_trade,
+                    daily_r_loss=daily_r_tracker.get(bar_date),
+                    reason=f"Exit LONG @ ${exec_price:.2f}. PnL: ${pnl:+.2f} ({(exec_price/entry_price-1)*100:+.2f}%)"
+                          + (f" [R: {r_value:+.2f}]" if r_value is not None else "")
+                ))
+                
+                position_side = "flat"
+                position_size = 0
+                entry_price = 0.0
+                entry_time = None
+                entry_stop_price = 0.0
+                entry_risk_amount = 0.0
+            
+            pending_action = None
+            pending_signal_idx = None
         
         # Generate action using appropriate strategy
         action, raw_info = generate_action_for_bar(config, df, i)
@@ -607,6 +862,54 @@ def run_auto_simulation(config: AutoSimConfig) -> AutoSimResult:
             current_equity = equity + unrealized_pnl
         else:
             current_equity = equity
+        
+        # Update peak equity
+        if current_equity > peak_equity:
+            peak_equity = current_equity
+        
+        # Check max drawdown
+        current_dd = 0.0
+        if peak_equity > 0:
+            current_dd = (peak_equity - current_equity) / peak_equity
+        
+        if config.max_drawdown_percent is not None and current_dd >= config.max_drawdown_percent:
+            simulation_halted = True
+            halt_reason = f"Max drawdown reached: {current_dd*100:.2f}% >= {config.max_drawdown_percent*100:.2f}%"
+            
+            decision_log.add(DecisionEvent(
+                timestamp=bar_time,
+                symbol=config.symbol,
+                timeframe=config.timeframe,
+                event_type="halt",
+                position_side=position_side,
+                price=close_price,
+                equity_before=current_equity,
+                equity_after=current_equity,
+                current_drawdown=current_dd,
+                halt_reason=halt_reason,
+                reason=halt_reason
+            ))
+            break
+        
+        # Check max daily loss (R)
+        trading_allowed_today = True
+        if config.max_daily_loss_r is not None and bar_date in daily_r_tracker:
+            if daily_r_tracker[bar_date] <= -config.max_daily_loss_r:
+                trading_allowed_today = False
+                
+                decision_log.add(DecisionEvent(
+                    timestamp=bar_time,
+                    symbol=config.symbol,
+                    timeframe=config.timeframe,
+                    event_type="halt",
+                    position_side=position_side,
+                    price=close_price,
+                    equity_before=current_equity,
+                    equity_after=current_equity,
+                    daily_r_loss=daily_r_tracker[bar_date],
+                    halt_reason=f"max_daily_loss_reached: {daily_r_tracker[bar_date]:.2f}R <= -{config.max_daily_loss_r:.2f}R",
+                    reason=f"Trading halted for the day: {daily_r_tracker[bar_date]:.2f}R loss (limit: -{config.max_daily_loss_r:.2f}R)"
+                ))
         
         # Build reason string
         reason = raw_info.get("reason", f"Strategy: {config.strategy_mode}")
@@ -622,88 +925,143 @@ def run_auto_simulation(config: AutoSimConfig) -> AutoSimResult:
             position_side=position_side,
             position_size=position_size if position_side == "long" else None,
             price=close_price,
+            atr_value=current_atr if config.use_r_management else None,
+            current_drawdown=current_dd if config.max_drawdown_percent else None,
+            daily_r_loss=daily_r_tracker.get(bar_date) if config.max_daily_loss_r else None,
             equity_before=current_equity,
             equity_after=current_equity,
             risk_per_trade=config.risk_per_trade,
             reason=reason
         ))
         
+        # Skip trading if daily loss limit reached (but allow exits)
+        if not trading_allowed_today and action == "buy":
+            action = "hold"
+        
         # Trading Logic
         equity_before = current_equity
         
-        if action == "buy" and position_side == "flat":
-            # Enter Long
-            position_size = calculate_position_size(equity, close_price, config)
-            
-            if position_size > 0:
-                position_side = "long"
-                entry_price = close_price
-                entry_time = bar_time
+        if config.execution_mode == "same_bar_close":
+            # Execute on same bar close
+            if action == "buy" and position_side == "flat":
+                # Enter Long
+                raw_price = close_price
+                exec_price, commission, slippage = calculate_execution_price(raw_price, True, config)
                 
-                # Calculate risk amount for logging
-                if config.position_sizing_mode == "percent_of_equity":
-                    risk_amount = equity * config.risk_per_trade
-                    sizing_info = f"({config.risk_per_trade*100:.1f}% of equity)"
-                elif config.position_sizing_mode == "full_equity":
-                    risk_amount = equity
-                    sizing_info = "(full equity)"
-                elif config.position_sizing_mode == "fixed_shares":
-                    risk_amount = position_size * close_price
-                    sizing_info = f"(fixed {config.fixed_shares} shares)"
-                else:
-                    risk_amount = config.fixed_dollar_amount or 0
-                    sizing_info = f"(fixed ${risk_amount:.0f})"
+                position_size = calculate_position_size(equity, exec_price, config)
+                
+                if position_size > 0:
+                    position_side = "long"
+                    entry_price = exec_price
+                    entry_time = bar_time
+                    
+                    # R-management
+                    if config.use_r_management:
+                        entry_atr = current_atr
+                        entry_stop_price = calculate_virtual_stop(entry_price, entry_atr, config)
+                        entry_risk_amount = (entry_price - entry_stop_price) * position_size
+                    
+                    # Build sizing info
+                    if config.position_sizing_mode == "percent_of_equity":
+                        sizing_info = f"({config.risk_per_trade*100:.1f}% of equity)"
+                    elif config.position_sizing_mode == "full_equity":
+                        sizing_info = "(full equity)"
+                    elif config.position_sizing_mode == "fixed_shares":
+                        sizing_info = f"(fixed {config.fixed_shares} shares)"
+                    else:
+                        sizing_info = f"(fixed ${config.fixed_dollar_amount:.0f})"
+                    
+                    decision_log.add(DecisionEvent(
+                        timestamp=bar_time,
+                        symbol=config.symbol,
+                        timeframe=config.timeframe,
+                        event_type="entry",
+                        final_signal=action,
+                        position_side="long",
+                        position_size=position_size,
+                        price=entry_price,
+                        execution_price=exec_price,
+                        execution_mode="same_bar_close",
+                        commission=commission,
+                        slippage=slippage,
+                        atr_value=entry_atr if config.use_r_management else None,
+                        stop_price=entry_stop_price if config.use_r_management else None,
+                        risk_amount=entry_risk_amount if config.use_r_management else None,
+                        equity_before=equity_before,
+                        equity_after=equity_before,
+                        risk_per_trade=config.risk_per_trade,
+                        reason=f"Enter LONG @ ${entry_price:.2f}, size={position_size} shares {sizing_info}"
+                    ))
+            
+            elif action == "sell" and position_side == "long":
+                # Exit Long
+                raw_price = close_price
+                exec_price, commission, slippage = calculate_execution_price(raw_price, False, config)
+                
+                pnl = (exec_price - entry_price) * position_size
+                
+                # Calculate R-value
+                r_value = None
+                if config.use_r_management and entry_risk_amount > 0:
+                    r_value = pnl / entry_risk_amount
+                    
+                    # Track daily R
+                    if bar_date not in daily_r_tracker:
+                        daily_r_tracker[bar_date] = 0.0
+                    daily_r_tracker[bar_date] += r_value
+                
+                equity += pnl
+                
+                trades.append({
+                    "entry_time": entry_time.isoformat() if hasattr(entry_time, 'isoformat') else str(entry_time),
+                    "exit_time": bar_time.isoformat() if hasattr(bar_time, 'isoformat') else str(bar_time),
+                    "entry_price": entry_price,
+                    "exit_price": exec_price,
+                    "size": position_size,
+                    "pnl": round(pnl, 2),
+                    "return_pct": round((exec_price / entry_price - 1) * 100, 2),
+                    "r_value": round(r_value, 2) if r_value is not None else None,
+                    "stop_price": entry_stop_price if config.use_r_management else None,
+                    "risk_amount": round(entry_risk_amount, 2) if config.use_r_management else None,
+                    "execution_mode": "same_bar_close"
+                })
                 
                 decision_log.add(DecisionEvent(
                     timestamp=bar_time,
                     symbol=config.symbol,
                     timeframe=config.timeframe,
-                    event_type="entry",
+                    event_type="exit",
                     final_signal=action,
-                    position_side="long",
+                    position_side="flat",
                     position_size=position_size,
-                    price=entry_price,
+                    price=exec_price,
+                    execution_price=exec_price,
+                    execution_mode="same_bar_close",
+                    commission=commission,
+                    slippage=slippage,
+                    r_value=r_value,
+                    stop_price=entry_stop_price if config.use_r_management else None,
+                    risk_amount=entry_risk_amount if config.use_r_management else None,
                     equity_before=equity_before,
-                    equity_after=equity_before,  # No change on entry
+                    equity_after=equity,
                     risk_per_trade=config.risk_per_trade,
-                    reason=f"Enter LONG @ ${entry_price:.2f}, size={position_size} shares {sizing_info}"
+                    daily_r_loss=daily_r_tracker.get(bar_date),
+                    reason=f"Exit LONG @ ${exec_price:.2f}. PnL: ${pnl:+.2f} ({(exec_price/entry_price-1)*100:+.2f}%)"
+                          + (f" [R: {r_value:+.2f}]" if r_value is not None else "")
                 ))
+                
+                position_side = "flat"
+                position_size = 0
+                entry_price = 0.0
+                entry_time = None
+                entry_stop_price = 0.0
+                entry_risk_amount = 0.0
         
-        elif action == "sell" and position_side == "long":
-            # Exit Long
-            exit_price = close_price
-            pnl = (exit_price - entry_price) * position_size
-            equity += pnl
-            
-            trades.append({
-                "entry_time": entry_time.isoformat() if hasattr(entry_time, 'isoformat') else str(entry_time),
-                "exit_time": bar_time.isoformat() if hasattr(bar_time, 'isoformat') else str(bar_time),
-                "entry_price": entry_price,
-                "exit_price": exit_price,
-                "size": position_size,
-                "pnl": round(pnl, 2),
-                "return_pct": round((exit_price / entry_price - 1) * 100, 2)
-            })
-            
-            decision_log.add(DecisionEvent(
-                timestamp=bar_time,
-                symbol=config.symbol,
-                timeframe=config.timeframe,
-                event_type="exit",
-                final_signal=action,
-                position_side="flat",
-                position_size=position_size,
-                price=exit_price,
-                equity_before=equity_before,
-                equity_after=equity,
-                risk_per_trade=config.risk_per_trade,
-                reason=f"Exit LONG @ ${exit_price:.2f}. PnL: ${pnl:+.2f} ({(exit_price/entry_price-1)*100:+.2f}%)"
-            ))
-            
-            position_side = "flat"
-            position_size = 0
-            entry_price = 0.0
-            entry_time = None
+        else:  # next_bar_open
+            # Queue action for next bar
+            if action in ["buy", "sell"]:
+                pending_action = action
+                pending_signal_idx = i
         
         # Record equity curve
         if position_side == "long":
@@ -715,13 +1073,19 @@ def run_auto_simulation(config: AutoSimConfig) -> AutoSimResult:
         equity_curve.append({
             "timestamp": bar_time.isoformat() if hasattr(bar_time, 'isoformat') else str(bar_time),
             "equity": round(curve_equity, 2),
-            "position": position_side
+            "position": position_side,
+            "drawdown": round(current_dd * 100, 2) if peak_equity > 0 else 0.0
         })
     
     # 4. Close any open position at the end
-    if position_side == "long":
+    if position_side == "long" and not simulation_halted:
         exit_price = float(df.iloc[-1]["close"])
         pnl = (exit_price - entry_price) * position_size
+        
+        r_value = None
+        if config.use_r_management and entry_risk_amount > 0:
+            r_value = pnl / entry_risk_amount
+        
         equity += pnl
         
         trades.append({
@@ -732,6 +1096,7 @@ def run_auto_simulation(config: AutoSimConfig) -> AutoSimResult:
             "size": position_size,
             "pnl": round(pnl, 2),
             "return_pct": round((exit_price / entry_price - 1) * 100, 2),
+            "r_value": round(r_value, 2) if r_value is not None else None,
             "note": "Closed at end of simulation"
         })
     
@@ -747,9 +1112,15 @@ def run_auto_simulation(config: AutoSimConfig) -> AutoSimResult:
     total_pnl = sum(t["pnl"] for t in trades)
     avg_pnl = total_pnl / total_trades if total_trades > 0 else 0.0
     
+    # R-based stats
+    r_values = [t.get("r_value") for t in trades if t.get("r_value") is not None]
+    total_r = sum(r_values) if r_values else None
+    avg_r = np.mean(r_values) if r_values else None
+    
     summary = {
         "strategy_mode": config.strategy_mode,
         "position_sizing_mode": config.position_sizing_mode,
+        "execution_mode": config.execution_mode,
         "total_trades": total_trades,
         "wins": wins,
         "losses": losses,
@@ -759,8 +1130,17 @@ def run_auto_simulation(config: AutoSimConfig) -> AutoSimResult:
         "best_trade": round(max((t["pnl"] for t in trades), default=0), 2),
         "worst_trade": round(min((t["pnl"] for t in trades), default=0), 2),
         "bars_analyzed": len(df) - warmup,
-        "decision_events": len(decision_log)
+        "decision_events": len(decision_log),
+        "simulation_halted": simulation_halted,
+        "halt_reason": halt_reason
     }
+    
+    # Add R stats if R-management enabled
+    if config.use_r_management and r_values:
+        summary["total_r"] = round(total_r, 2)
+        summary["avg_r"] = round(avg_r, 2)
+        summary["best_r"] = round(max(r_values), 2)
+        summary["worst_r"] = round(min(r_values), 2)
     
     # Add MA params to summary if using MA mode
     if config.strategy_mode == "ma_crossover":
