@@ -4724,10 +4724,30 @@ def render_multi_symbol_sim():
             st.error("Please enter at least one symbol")
             return
         
-        with st.spinner(f"Running {strategy_options[strategy_mode]} simulation for {len(symbols)} symbols..."):
+        total_symbols = len(symbols)
+        
+        # Initialize progress elements
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
+        # Run simulations for each symbol individually with progress updates
+        results_list = []
+        successful = 0
+        failed = 0
+        failed_symbols = []
+        
+        status_text.markdown(f"🔄 Starting simulation for **{total_symbols}** symbols...")
+        
+        for i, symbol in enumerate(symbols):
+            # Update status
+            progress_pct = i / total_symbols
+            status_text.markdown(f"🔄 Processing **{symbol}** ({i+1}/{total_symbols} - {progress_pct*100:.1f}%)")
+            progress_bar.progress(progress_pct)
+            
             try:
+                # Build single-symbol payload
                 payload = {
-                    "symbols": symbols,
+                    "symbol": symbol,
                     "timeframe": timeframe,
                     "start_date": str(start_date),
                     "end_date": str(end_date),
@@ -4746,16 +4766,81 @@ def render_multi_symbol_sim():
                     "max_bars": 0
                 }
                 
-                resp = requests.post(f"{BACKEND_URL}/multi-simulate", json=payload, timeout=600)
+                resp = requests.post(f"{BACKEND_URL}/auto-simulate", json=payload, timeout=120)
                 
                 if resp.status_code == 200:
-                    result = resp.json()
-                    st.session_state["multi_sim_result"] = result
-                    st.success(f"✅ Simulation complete! {result['successful']}/{result['total_symbols']} symbols succeeded.")
+                    sim_result = resp.json()
+                    
+                    # Extract summary for ranking
+                    summary = sim_result.get("summary", {})
+                    results_list.append({
+                        "symbol": symbol,
+                        "total_trades": summary.get("total_trades", 0),
+                        "win_rate": summary.get("win_rate", 0) * 100,  # Convert to %
+                        "total_r": summary.get("total_r", 0),
+                        "avg_r_per_trade": summary.get("avg_r_per_trade", 0),
+                        "max_drawdown": summary.get("max_drawdown_percent", 0) * 100,  # Convert to %
+                        "total_return": summary.get("total_return_percent", 0) * 100,  # Convert to %
+                        "status": "success"
+                    })
+                    successful += 1
                 else:
-                    st.error(f"Simulation failed: {resp.text}")
+                    results_list.append({
+                        "symbol": symbol,
+                        "total_trades": 0,
+                        "win_rate": 0,
+                        "total_r": 0,
+                        "avg_r_per_trade": 0,
+                        "max_drawdown": 0,
+                        "total_return": 0,
+                        "status": "failed"
+                    })
+                    failed += 1
+                    failed_symbols.append(symbol)
+                    
             except Exception as e:
-                st.error(f"Error: {e}")
+                results_list.append({
+                    "symbol": symbol,
+                    "total_trades": 0,
+                    "win_rate": 0,
+                    "total_r": 0,
+                    "avg_r_per_trade": 0,
+                    "max_drawdown": 0,
+                    "total_return": 0,
+                    "status": "error"
+                })
+                failed += 1
+                failed_symbols.append(symbol)
+        
+        # Complete progress
+        progress_bar.progress(1.0)
+        status_text.markdown(f"✅ **Simulation complete!** {successful}/{total_symbols} symbols succeeded.")
+        
+        # Sort results by total_r (descending)
+        results_list.sort(key=lambda x: x.get("total_r", 0), reverse=True)
+        
+        # Build result object compatible with existing display function
+        result = {
+            "total_symbols": total_symbols,
+            "successful": successful,
+            "failed": failed,
+            "failed_symbols": failed_symbols,
+            "results": results_list,
+            "parameters": {
+                "strategy_mode": strategy_mode,
+                "timeframe": timeframe,
+                "start_date": str(start_date),
+                "end_date": str(end_date),
+                "ma_short_window": ma_short if strategy_mode == "ma_crossover" else None,
+                "ma_long_window": ma_long if strategy_mode == "ma_crossover" else None,
+                "rsi_period": rsi_period if strategy_mode == "rsi_mean_reversion" else None,
+                "rsi_oversold": rsi_oversold if strategy_mode == "rsi_mean_reversion" else None,
+                "rsi_overbought": rsi_overbought if strategy_mode == "rsi_mean_reversion" else None,
+            }
+        }
+        
+        st.session_state["multi_sim_result"] = result
+        st.success(f"✅ Simulation complete! {successful}/{total_symbols} symbols succeeded.")
     
     # Display results
     if "multi_sim_result" in st.session_state:
