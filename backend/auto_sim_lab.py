@@ -52,11 +52,16 @@ class AutoSimConfig(BaseModel):
     max_bars: Optional[int] = None    # Use last N bars if specified
     
     # Strategy Mode
-    strategy_mode: Literal["final_signal", "ma_crossover"] = "final_signal"
+    strategy_mode: Literal["final_signal", "ma_crossover", "buy_and_hold", "rsi_mean_reversion"] = "final_signal"
     
     # MA Crossover specific params
     ma_short_window: Optional[int] = None
     ma_long_window: Optional[int] = None
+    
+    # RSI Mean Reversion specific params
+    rsi_period: int = 14
+    rsi_oversold: int = 30
+    rsi_overbought: int = 70
     
     # Position Sizing Mode
     position_sizing_mode: Literal[
@@ -96,6 +101,11 @@ class AutoSimConfig(BaseModel):
                 raise ValueError('ma_long_window required for ma_crossover mode')
             if self.ma_short_window >= self.ma_long_window:
                 raise ValueError('ma_short_window must be < ma_long_window')
+        
+        # Validate RSI params when rsi_mean_reversion mode is used
+        if self.strategy_mode == 'rsi_mean_reversion':
+            if self.rsi_oversold >= self.rsi_overbought:
+                raise ValueError('rsi_oversold must be < rsi_overbought')
         
         # Validate fixed sizing parameters
         if self.position_sizing_mode == 'fixed_shares':
@@ -171,6 +181,8 @@ def generate_action_for_bar(
     Supports multiple strategy modes:
     - final_signal: Use Live Signal predictors
     - ma_crossover: Use MA Crossover strategy
+    - buy_and_hold: Buy on first bar, hold forever
+    - rsi_mean_reversion: Buy when RSI < oversold, sell when RSI > overbought
     
     Args:
         config: Simulation configuration
@@ -184,6 +196,10 @@ def generate_action_for_bar(
     """
     if config.strategy_mode == "ma_crossover":
         return _generate_ma_crossover_action(config, df, idx)
+    elif config.strategy_mode == "buy_and_hold":
+        return _generate_buy_and_hold_action(config, df, idx)
+    elif config.strategy_mode == "rsi_mean_reversion":
+        return _generate_rsi_action(config, df, idx)
     else:
         return _generate_final_signal_action(config, df, idx)
 
@@ -251,6 +267,91 @@ def _generate_ma_crossover_action(
         "long_ma": round(current_long, 2),
         "signal": current_signal,
         "crossover": action != "hold",
+        "reason": reason
+    }
+    
+    return action, raw_info
+
+
+def _generate_buy_and_hold_action(
+    config: AutoSimConfig,
+    df: pd.DataFrame,
+    idx: int,
+) -> Tuple[str, Dict[str, Any]]:
+    """
+    Generate action using Buy & Hold strategy.
+    
+    Logic:
+    - Buy on the first opportunity (always return "buy")
+    - The simulation will only execute if not already in position
+    - Never sell (always return "hold" after first buy would execute)
+    
+    Note: The simulation logic handles the "already in position" case,
+    so we always return "buy" to ensure entry on first bar.
+    """
+    # Always return "buy" - simulation handles position state
+    # This ensures we buy on the first available bar
+    action = "buy"
+    reason = "Buy & Hold: Buy and hold position"
+    
+    raw_info = {
+        "strategy": "buy_and_hold",
+        "bar_index": idx,
+        "reason": reason
+    }
+    
+    return action, raw_info
+
+
+
+def _generate_rsi_action(
+    config: AutoSimConfig,
+    df: pd.DataFrame,
+    idx: int,
+) -> Tuple[str, Dict[str, Any]]:
+    """
+    Generate action using RSI Mean Reversion strategy.
+    
+    Logic:
+    - Buy when RSI < oversold
+    - Sell when RSI > overbought
+    """
+    period = config.rsi_period
+    oversold = config.rsi_oversold
+    overbought = config.rsi_overbought
+    
+    # Need enough data for RSI calculation
+    if idx < period:
+        return "hold", {
+            "strategy": "rsi_mean_reversion",
+            "reason": f"Insufficient data for RSI calculation ({idx} < {period})"
+        }
+    
+    # Calculate RSI
+    close = df['close'].iloc[:idx+1]
+    delta = close.diff()
+    
+    gain = delta.where(delta > 0, 0).rolling(window=period).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+    
+    rs = gain.iloc[-1] / loss.iloc[-1] if loss.iloc[-1] != 0 else 0
+    current_rsi = 100 - (100 / (1 + rs)) if rs != 0 else 50
+    
+    # Determine action
+    action = "hold"
+    if current_rsi < oversold:
+        action = "buy"
+    elif current_rsi > overbought:
+        action = "sell"
+    
+    reason = f"RSI={current_rsi:.1f} (oversold={oversold}, overbought={overbought})"
+    
+    raw_info = {
+        "strategy": "rsi_mean_reversion",
+        "rsi_period": period,
+        "rsi_oversold": oversold,
+        "rsi_overbought": overbought,
+        "current_rsi": round(current_rsi, 2),
         "reason": reason
     }
     

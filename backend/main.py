@@ -1100,6 +1100,42 @@ async def get_predictor_backtest(
         raise HTTPException(status_code=500, detail=f"Predictor backtest failed: {str(e)}")
 
 
+# =============================================================================
+# Symbol Universes API
+# =============================================================================
+
+@app.get("/symbol-universes")
+async def get_symbol_universes() -> Dict[str, Any]:
+    """
+    Get all available symbol universes.
+    
+    Returns:
+        Dict of universe_id -> {label, description, symbols}
+    """
+    from backend.config.symbol_universes import get_all_universes
+    return get_all_universes()
+
+
+@app.get("/symbol-universes/{universe_id}")
+async def get_symbol_universe(universe_id: str) -> Dict[str, Any]:
+    """
+    Get a specific symbol universe by ID.
+    
+    Args:
+        universe_id: Universe identifier (e.g., "sp500_all", "mega_caps")
+        
+    Returns:
+        Universe details including label, description, and symbols
+    """
+    from backend.config.symbol_universes import get_universe
+    
+    universe = get_universe(universe_id)
+    if universe is None:
+        raise HTTPException(status_code=404, detail=f"Universe '{universe_id}' not found")
+    
+    return universe
+
+
 @app.get("/symbol_preset")
 async def get_symbol_preset(symbol: str) -> Dict[str, Any]:
     """

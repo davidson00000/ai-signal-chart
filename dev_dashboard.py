@@ -4457,43 +4457,56 @@ def render_multi_symbol_sim():
     
     st.markdown("---")
     
-    # Universe Presets Definition
-    UNIVERSE_PRESETS = {
-        "Custom (手動入力)": [],
-        "MegaCaps (MAG7)": ["AAPL", "MSFT", "GOOGL", "AMZN", "META", "NVDA", "TSLA"],
-        "US Semiconductors": ["NVDA", "AMD", "AVGO", "TSM", "MU", "ASML", "QCOM", "INTC"],
-        "Kousuke Watchlist v1": ["AAPL", "MSFT", "GOOGL", "AMZN", "META", "NVDA", "TSLA", "AMD", "AVGO", "NFLX"],
-    }
+    # Fetch universes from API
+    try:
+        resp = requests.get(f"{BACKEND_URL}/symbol-universes", timeout=10)
+        if resp.status_code == 200:
+            api_universes = resp.json()
+        else:
+            api_universes = {}
+    except Exception:
+        api_universes = {}
+    
+    # Build universe options - combine "Custom" with API universes
+    universe_options = {"custom": {"label": "Custom (手動入力)", "symbols": []}}
+    universe_options.update(api_universes)
     
     # Configuration
     st.subheader("⚙️ Configuration")
     
     # Universe Preset Selector
-    preset_options = list(UNIVERSE_PRESETS.keys())
-    default_preset_index = preset_options.index("MegaCaps (MAG7)")
+    universe_keys = list(universe_options.keys())
+    universe_labels = [universe_options[k]["label"] for k in universe_keys]
+    
+    # Default to mega_caps if available, else first option
+    default_idx = universe_keys.index("mega_caps") if "mega_caps" in universe_keys else 0
     
     # Get previous preset to detect changes
     prev_preset = st.session_state.get("_prev_multi_sim_preset", None)
     
-    selected_preset = st.selectbox(
+    selected_idx = st.selectbox(
         "Universe Preset",
-        options=preset_options,
-        index=default_preset_index,
+        options=range(len(universe_labels)),
+        format_func=lambda i: universe_labels[i],
+        index=default_idx,
         key="multi_sim_preset",
         help="Select a preset symbol list or choose 'Custom' for manual input"
     )
     
+    selected_key = universe_keys[selected_idx]
+    selected_universe = universe_options[selected_key]
+    
     # Update symbols when preset changes
-    if selected_preset != prev_preset and selected_preset != "Custom (手動入力)":
-        preset_symbols = UNIVERSE_PRESETS.get(selected_preset, [])
+    if selected_key != prev_preset and selected_key != "custom":
+        preset_symbols = selected_universe.get("symbols", [])
         if preset_symbols:
             st.session_state["multi_sim_symbols_value"] = ", ".join(preset_symbols)
     
     # Store current preset for next comparison
-    st.session_state["_prev_multi_sim_preset"] = selected_preset
+    st.session_state["_prev_multi_sim_preset"] = selected_key
     
     # Default value for symbols
-    default_symbols = UNIVERSE_PRESETS.get("MegaCaps (MAG7)", [])
+    default_symbols = universe_options.get("mega_caps", {}).get("symbols", ["AAPL", "MSFT", "GOOGL", "AMZN", "META", "NVDA", "TSLA"])
     default_symbols_str = ", ".join(default_symbols)
     
     col1, col2 = st.columns(2)
@@ -4502,12 +4515,16 @@ def render_multi_symbol_sim():
         # Symbol selection text area
         current_symbols_value = st.session_state.get("multi_sim_symbols_value", default_symbols_str)
         
+        # Show text area for custom or display current symbols
+        is_custom = selected_key == "custom"
+        
         symbols_input = st.text_area(
             "Symbols (comma-separated)",
             value=current_symbols_value,
             height=100,
             key="multi_sim_symbols",
-            help="Enter symbols separated by commas. Select a preset above to auto-fill."
+            disabled=not is_custom and selected_key != "custom",
+            help="Enter symbols separated by commas. Select 'Custom' to edit manually."
         )
         
         # Update session state with current input
@@ -4534,20 +4551,64 @@ def render_multi_symbol_sim():
         )
     
     with col2:
-        # Strategy Settings
+        # Strategy Selection
         st.markdown("**Strategy Settings**")
         
-        ma_short = st.number_input(
-            "MA Short Window",
-            min_value=5, max_value=100, value=50,
-            key="multi_sim_ma_short"
+        strategy_options = {
+            "ma_crossover": "MA Crossover",
+            "buy_and_hold": "Buy & Hold",
+            "rsi_mean_reversion": "RSI Mean Reversion"
+        }
+        
+        strategy_mode = st.selectbox(
+            "Strategy",
+            options=list(strategy_options.keys()),
+            format_func=lambda x: strategy_options[x],
+            index=0,
+            key="multi_sim_strategy"
         )
         
-        ma_long = st.number_input(
-            "MA Long Window",
-            min_value=10, max_value=200, value=60,
-            key="multi_sim_ma_long"
-        )
+        # Conditional parameters based on strategy
+        ma_short = 50
+        ma_long = 60
+        rsi_period = 14
+        rsi_oversold = 30
+        rsi_overbought = 70
+        
+        if strategy_mode == "ma_crossover":
+            ma_short = st.number_input(
+                "MA Short Window",
+                min_value=5, max_value=100, value=50,
+                key="multi_sim_ma_short"
+            )
+            
+            ma_long = st.number_input(
+                "MA Long Window",
+                min_value=10, max_value=200, value=60,
+                key="multi_sim_ma_long"
+            )
+        
+        elif strategy_mode == "rsi_mean_reversion":
+            rsi_period = st.number_input(
+                "RSI Period",
+                min_value=2, max_value=100, value=14,
+                key="multi_sim_rsi_period"
+            )
+            
+            rsi_oversold = st.number_input(
+                "RSI Oversold Level",
+                min_value=1, max_value=49, value=30,
+                key="multi_sim_rsi_oversold"
+            )
+            
+            rsi_overbought = st.number_input(
+                "RSI Overbought Level",
+                min_value=51, max_value=99, value=70,
+                key="multi_sim_rsi_overbought"
+            )
+        
+        elif strategy_mode == "buy_and_hold":
+            st.info("Buy & Hold has no configurable parameters. Buys on first bar and holds to end.")
         
         execution_mode = st.selectbox(
             "Execution Mode",
@@ -4556,17 +4617,22 @@ def render_multi_symbol_sim():
             key="multi_sim_exec_mode"
         )
         
-        # R-Management
-        use_r_mgmt = st.checkbox("Enable R-Management", value=True, key="multi_sim_r_mgmt")
-        
-        if use_r_mgmt:
-            stop_percent = st.slider(
-                "Virtual Stop (%)",
-                min_value=1.0, max_value=10.0, value=3.0, step=0.5,
-                key="multi_sim_stop_pct"
-            ) / 100.0
-        else:
+        # R-Management (disable for buy_and_hold)
+        if strategy_mode == "buy_and_hold":
+            use_r_mgmt = False
             stop_percent = 0.03
+            st.caption("R-Management disabled for Buy & Hold")
+        else:
+            use_r_mgmt = st.checkbox("Enable R-Management", value=True, key="multi_sim_r_mgmt")
+            
+            if use_r_mgmt:
+                stop_percent = st.slider(
+                    "Virtual Stop (%)",
+                    min_value=1.0, max_value=10.0, value=3.0, step=0.5,
+                    key="multi_sim_stop_pct"
+                ) / 100.0
+            else:
+                stop_percent = 0.03
     
     # Date range
     col_d1, col_d2 = st.columns(2)
@@ -4591,7 +4657,7 @@ def render_multi_symbol_sim():
             st.error("Please enter at least one symbol")
             return
         
-        with st.spinner(f"Running simulation for {len(symbols)} symbols..."):
+        with st.spinner(f"Running {strategy_options[strategy_mode]} simulation for {len(symbols)} symbols..."):
             try:
                 payload = {
                     "symbols": symbols,
@@ -4599,9 +4665,12 @@ def render_multi_symbol_sim():
                     "start_date": str(start_date),
                     "end_date": str(end_date),
                     "initial_capital": initial_capital,
-                    "strategy_mode": "ma_crossover",
+                    "strategy_mode": strategy_mode,
                     "ma_short_window": ma_short,
                     "ma_long_window": ma_long,
+                    "rsi_period": rsi_period,
+                    "rsi_oversold": rsi_oversold,
+                    "rsi_overbought": rsi_overbought,
                     "execution_mode": execution_mode,
                     "position_sizing_mode": "full_equity",
                     "use_r_management": use_r_mgmt,
@@ -4610,7 +4679,7 @@ def render_multi_symbol_sim():
                     "max_bars": 0
                 }
                 
-                resp = requests.post(f"{BACKEND_URL}/multi-simulate", json=payload, timeout=300)
+                resp = requests.post(f"{BACKEND_URL}/multi-simulate", json=payload, timeout=600)
                 
                 if resp.status_code == 200:
                     result = resp.json()

@@ -17,9 +17,14 @@ class MultiSimConfig(BaseModel):
     initial_capital: float = Field(default=100000.0, description="Initial capital per symbol")
     
     # Strategy settings
-    strategy_mode: str = Field(default="ma_crossover", description="Strategy mode")
+    strategy_mode: str = Field(default="ma_crossover", description="Strategy mode: ma_crossover, buy_and_hold, rsi_mean_reversion")
     ma_short_window: int = Field(default=50, description="Short MA window")
     ma_long_window: int = Field(default=60, description="Long MA window")
+    
+    # RSI parameters
+    rsi_period: int = Field(default=14, description="RSI calculation period")
+    rsi_oversold: int = Field(default=30, description="RSI oversold threshold")
+    rsi_overbought: int = Field(default=70, description="RSI overbought threshold")
     
     # Execution settings
     execution_mode: str = Field(default="same_bar_close", description="Execution mode")

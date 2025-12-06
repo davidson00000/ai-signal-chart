@@ -77,3 +77,12 @@ class RSIMeanReversionStrategy(StrategyBase):
             "y_range": {"min": 55, "max": 80, "step": 5},
             "fixed_params": {"period": 14}
         }
+
+
+# Strategy metadata for registry
+STRATEGY_METADATA = {
+    "id": "rsi_mean_reversion",
+    "name": "RSI Mean Reversion",
+    "description": "Buy when RSI < Oversold, sell when RSI > Overbought. Long only.",
+    "docs_path": "docs/strategies/rsi_mean_reversion.md"
+}
