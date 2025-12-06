@@ -17,6 +17,7 @@ class PaperAccount(BaseModel):
     equity: float = Field(..., description="Current total equity (cash + open PnL)")
     cash: float = Field(..., description="Available cash")
     open_risk: float = Field(0.0, description="Sum of risk of all open positions (in currency)")
+    risk_per_trade_pct: float = Field(1.0, description="Risk per trade as percentage of equity (default 1%)")
     created_at: datetime
     updated_at: datetime
 
@@ -25,6 +26,10 @@ class PaperAccount(BaseModel):
         if self.equity == 0:
             return 0.0
         return self.open_risk / self.equity
+    
+    def calculate_r_risk(self) -> float:
+        """Calculate dollar risk for 1R based on current equity and risk_per_trade_pct."""
+        return self.equity * (self.risk_per_trade_pct / 100.0)
 
 
 # ============================================================================
@@ -47,6 +52,7 @@ class PaperPosition(BaseModel):
     closed_at: Optional[datetime] = None
     status: Literal["OPEN", "CLOSED"] = "OPEN"
     tags: List[str] = Field(default_factory=list)
+    r_risk_amount: float = Field(0.0, description="Dollar risk for 1R (calculated at position open)")
 
     def is_open(self) -> bool:
         return self.status == "OPEN"
@@ -54,8 +60,13 @@ class PaperPosition(BaseModel):
     def r_risk(self) -> float:
         """
         Return the monetary risk amount (1R) for this position.
-        If stop_price is not set or risk is invalid/negative, return 0.0.
+        Priority: use r_risk_amount if set, otherwise calculate from stop_price.
         """
+        # First, use the stored r_risk_amount if it's positive
+        if self.r_risk_amount > 0:
+            return self.r_risk_amount
+        
+        # Fallback: calculate from stop_price if available
         if self.stop_price is None or self.size == 0:
             return 0.0
 

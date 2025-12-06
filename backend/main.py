@@ -1301,6 +1301,9 @@ def open_paper_position(req: OpenPaperPositionRequest):
     # Create position_id (simple scheme; can be improved later)
     position_id = f"{req.account_id}-{req.symbol}-{int(opened_at.timestamp())}"
 
+    # Calculate R-risk amount based on account equity and risk percentage
+    r_risk_amount = account.calculate_r_risk()
+
     position = PaperPosition(
         position_id=position_id,
         account_id=req.account_id,
@@ -1314,6 +1317,7 @@ def open_paper_position(req: OpenPaperPositionRequest):
         closed_at=None,
         status="OPEN",
         tags=req.tags,
+        r_risk_amount=r_risk_amount,  # Store the calculated R-risk
     )
 
     # Store position
@@ -1322,12 +1326,10 @@ def open_paper_position(req: OpenPaperPositionRequest):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    # Optionally update account risk (equity/cash adjustments can be added later)
-    risk_amount = position.r_risk()
-    if risk_amount > 0:
-        account.open_risk += risk_amount
-        account.updated_at = datetime.utcnow()
-        paper_store.upsert_account(account)
+    # Update account open_risk
+    account.open_risk += r_risk_amount
+    account.updated_at = datetime.utcnow()
+    paper_store.upsert_account(account)
 
     return position
 
