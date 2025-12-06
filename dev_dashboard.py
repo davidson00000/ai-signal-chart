@@ -3895,15 +3895,15 @@ def render_auto_sim_lab():
     # Mode selector
     sim_mode = st.radio(
         "Simulation Mode",
-        ["📊 Historical (Backtest)", "🔴 Realtime (Live)"],
+        ["📊 Historical (Backtest)", "🌐 Multi-Symbol", "🔴 Realtime (Live)"],
         horizontal=True,
         key="auto_sim_mode"
     )
     
-    is_realtime = sim_mode == "🔴 Realtime (Live)"
-    
-    if is_realtime:
+    if sim_mode == "🔴 Realtime (Live)":
         render_auto_sim_realtime()
+    elif sim_mode == "🌐 Multi-Symbol":
+        render_multi_symbol_sim()
     else:
         render_auto_sim_historical()
 
@@ -4446,6 +4446,262 @@ def render_auto_sim_realtime():
                         st.error(f"Failed to start: {resp.text}")
                 except Exception as e:
                     st.error(f"Error: {e}")
+
+
+def render_multi_symbol_sim():
+    """Render Multi-Symbol Auto Sim UI."""
+    st.markdown("""
+    **Multi-Symbol Mode** runs the same strategy across multiple symbols simultaneously.
+    Results are ranked by **Total R** (best performers first).
+    """)
+    
+    st.markdown("---")
+    
+    # Default symbol universe
+    DEFAULT_SYMBOLS = [
+        "AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA", "AMD", "NFLX", "AVGO",
+        "JPM", "V", "UNH", "JNJ", "WMT", "PG", "MA", "HD", "DIS", "PYPL"
+    ]
+    
+    # Configuration
+    st.subheader("⚙️ Configuration")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        # Symbol selection
+        symbols_input = st.text_area(
+            "Symbols (comma-separated)",
+            value=", ".join(DEFAULT_SYMBOLS[:10]),
+            height=100,
+            key="multi_sim_symbols",
+            help="Enter symbols separated by commas"
+        )
+        
+        # Parse symbols
+        symbols = [s.strip().upper() for s in symbols_input.split(",") if s.strip()]
+        st.caption(f"Selected: {len(symbols)} symbols")
+        
+        timeframe = st.selectbox(
+            "Timeframe",
+            options=["1d", "4h", "1h"],
+            index=0,
+            key="multi_sim_timeframe"
+        )
+        
+        initial_capital = st.number_input(
+            "Initial Capital (per symbol)",
+            min_value=1000.0,
+            max_value=10000000.0,
+            value=100000.0,
+            step=10000.0,
+            key="multi_sim_capital"
+        )
+    
+    with col2:
+        # Strategy Settings
+        st.markdown("**Strategy Settings**")
+        
+        ma_short = st.number_input(
+            "MA Short Window",
+            min_value=5, max_value=100, value=50,
+            key="multi_sim_ma_short"
+        )
+        
+        ma_long = st.number_input(
+            "MA Long Window",
+            min_value=10, max_value=200, value=60,
+            key="multi_sim_ma_long"
+        )
+        
+        execution_mode = st.selectbox(
+            "Execution Mode",
+            options=["same_bar_close", "next_bar_open"],
+            index=0,
+            key="multi_sim_exec_mode"
+        )
+        
+        # R-Management
+        use_r_mgmt = st.checkbox("Enable R-Management", value=True, key="multi_sim_r_mgmt")
+        
+        if use_r_mgmt:
+            stop_percent = st.slider(
+                "Virtual Stop (%)",
+                min_value=1.0, max_value=10.0, value=3.0, step=0.5,
+                key="multi_sim_stop_pct"
+            ) / 100.0
+        else:
+            stop_percent = 0.03
+    
+    # Date range
+    col_d1, col_d2 = st.columns(2)
+    with col_d1:
+        start_date = st.date_input(
+            "Start Date",
+            value=pd.to_datetime("2025-01-01"),
+            key="multi_sim_start"
+        )
+    with col_d2:
+        end_date = st.date_input(
+            "End Date",
+            value=pd.to_datetime("today"),
+            key="multi_sim_end"
+        )
+    
+    st.markdown("---")
+    
+    # Run button
+    if st.button("🚀 Run Multi-Symbol Simulation", type="primary", use_container_width=True, key="run_multi_sim"):
+        if not symbols:
+            st.error("Please enter at least one symbol")
+            return
+        
+        with st.spinner(f"Running simulation for {len(symbols)} symbols..."):
+            try:
+                payload = {
+                    "symbols": symbols,
+                    "timeframe": timeframe,
+                    "start_date": str(start_date),
+                    "end_date": str(end_date),
+                    "initial_capital": initial_capital,
+                    "strategy_mode": "ma_crossover",
+                    "ma_short_window": ma_short,
+                    "ma_long_window": ma_long,
+                    "execution_mode": execution_mode,
+                    "position_sizing_mode": "full_equity",
+                    "use_r_management": use_r_mgmt,
+                    "virtual_stop_method": "percent",
+                    "virtual_stop_percent": stop_percent,
+                    "max_bars": 0
+                }
+                
+                resp = requests.post(f"{BACKEND_URL}/multi-simulate", json=payload, timeout=300)
+                
+                if resp.status_code == 200:
+                    result = resp.json()
+                    st.session_state["multi_sim_result"] = result
+                    st.success(f"✅ Simulation complete! {result['successful']}/{result['total_symbols']} symbols succeeded.")
+                else:
+                    st.error(f"Simulation failed: {resp.text}")
+            except Exception as e:
+                st.error(f"Error: {e}")
+    
+    # Display results
+    if "multi_sim_result" in st.session_state:
+        result = st.session_state["multi_sim_result"]
+        _render_multi_sim_results(result)
+
+
+def _render_multi_sim_results(result: dict):
+    """Render Multi-Symbol simulation results."""
+    st.markdown("---")
+    st.subheader("🏆 Symbol Ranking")
+    
+    results_list = result.get("results", [])
+    
+    if not results_list:
+        st.warning("No results to display")
+        return
+    
+    # Create DataFrame
+    df = pd.DataFrame(results_list)
+    
+    # Column order and formatting
+    display_cols = ["rank", "symbol", "total_return", "total_r", "avg_r", "win_rate", "max_dd", "trades", "error"]
+    display_cols = [c for c in display_cols if c in df.columns]
+    
+    df_display = df[display_cols].copy()
+    
+    # Rename columns for display
+    df_display = df_display.rename(columns={
+        "rank": "Rank",
+        "symbol": "Symbol",
+        "total_return": "Return %",
+        "total_r": "Total R",
+        "avg_r": "Avg R",
+        "win_rate": "Win Rate %",
+        "max_dd": "Max DD %",
+        "trades": "Trades",
+        "error": "Error"
+    })
+    
+    # Apply conditional formatting
+    def highlight_row(row):
+        if row.get("Error") and pd.notna(row.get("Error")):
+            return ["background-color: #ffcccc"] * len(row)
+        
+        total_r = row.get("Total R")
+        if pd.notna(total_r):
+            if total_r > 5:
+                return ["background-color: #ccffcc"] * len(row)
+            elif total_r > 0:
+                return ["background-color: #e6ffe6"] * len(row)
+            elif total_r < -5:
+                return ["background-color: #ffcccc"] * len(row)
+        return [""] * len(row)
+    
+    styled_df = df_display.style.apply(highlight_row, axis=1)
+    
+    # Display table
+    st.dataframe(
+        styled_df,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Rank": st.column_config.NumberColumn("🏅 Rank"),
+            "Symbol": st.column_config.TextColumn("Symbol"),
+            "Return %": st.column_config.NumberColumn("Return %", format="%.2f%%"),
+            "Total R": st.column_config.NumberColumn("Total R", format="%.2fR"),
+            "Avg R": st.column_config.NumberColumn("Avg R", format="%.2fR"),
+            "Win Rate %": st.column_config.NumberColumn("Win %", format="%.1f%%"),
+            "Max DD %": st.column_config.NumberColumn("Max DD", format="%.1f%%"),
+            "Trades": st.column_config.NumberColumn("Trades"),
+        }
+    )
+    
+    # Summary stats
+    successful_results = [r for r in results_list if r.get("error") is None]
+    
+    if successful_results:
+        st.markdown("---")
+        st.subheader("📈 Summary Statistics")
+        
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            avg_return = sum(r["total_return"] for r in successful_results) / len(successful_results)
+            st.metric("Avg Return", f"{avg_return:.2f}%")
+        
+        with col2:
+            total_r_list = [r["total_r"] for r in successful_results if r.get("total_r") is not None]
+            if total_r_list:
+                avg_total_r = sum(total_r_list) / len(total_r_list)
+                st.metric("Avg Total R", f"{avg_total_r:.2f}R")
+        
+        with col3:
+            avg_win = sum(r["win_rate"] for r in successful_results) / len(successful_results)
+            st.metric("Avg Win Rate", f"{avg_win:.1f}%")
+        
+        with col4:
+            total_trades = sum(r["trades"] for r in successful_results)
+            st.metric("Total Trades", total_trades)
+        
+        # Best/Worst performers
+        st.markdown("---")
+        col_best, col_worst = st.columns(2)
+        
+        with col_best:
+            st.markdown("### 🏆 Top 3 Performers")
+            top3 = successful_results[:3]
+            for i, r in enumerate(top3):
+                emoji = ["🥇", "🥈", "🥉"][i]
+                st.markdown(f"{emoji} **{r['symbol']}**: {r['total_r']:.2f}R ({r['total_return']:+.1f}%)" if r.get('total_r') else f"{emoji} **{r['symbol']}**: {r['total_return']:+.1f}%")
+        
+        with col_worst:
+            st.markdown("### 📉 Bottom 3 Performers")
+            bottom3 = successful_results[-3:][::-1]
+            for i, r in enumerate(bottom3):
+                st.markdown(f"**{r['symbol']}**: {r['total_r']:.2f}R ({r['total_return']:+.1f}%)" if r.get('total_r') else f"**{r['symbol']}**: {r['total_return']:+.1f}%")
 
 
 def _render_auto_sim_results(result: dict, key_suffix: str):

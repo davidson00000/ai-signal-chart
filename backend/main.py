@@ -1419,6 +1419,38 @@ def auto_simulate(config: AutoSimConfig):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# Multi-Symbol Simulation
+from backend.models.multi_sim import MultiSimConfig, MultiSimResult
+from backend.multi_sim_engine import run_multi_simulation
+
+
+@app.post("/multi-simulate", response_model=MultiSimResult)
+def multi_simulate(config: MultiSimConfig):
+    """
+    Run multi-symbol simulation across multiple symbols.
+    
+    Runs Auto Sim Lab for each symbol and returns a ranked table of results.
+    
+    Ranking criteria:
+    1. Total R (highest first)
+    2. Avg R/Trade (if tie)
+    3. Max Drawdown (lower is better, if tie)
+    
+    Args:
+        config: Multi-sim configuration with list of symbols and settings
+        
+    Returns:
+        MultiSimResult with ranked results for all symbols
+    """
+    try:
+        result = run_multi_simulation(config)
+        return result
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # =============================================================================
 # Realtime Sim Lab Endpoints
 # =============================================================================
