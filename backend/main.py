@@ -1391,7 +1391,36 @@ def list_trades(account_id: str = "default"):
 app.include_router(paper_router)
 
 
+# =============================================================================
+# Auto Sim Lab Endpoints
+# =============================================================================
+
+from backend.auto_sim_lab import AutoSimConfig, AutoSimResult, run_auto_simulation
+
+
+@app.post("/auto-simulate", response_model=AutoSimResult)
+def auto_simulate(config: AutoSimConfig):
+    """
+    Run automated paper trading simulation using Final Signal.
+    
+    This endpoint uses the same signal generation logic as Live Signal,
+    but applies it historically to simulate trades with configurable risk management.
+    
+    Args:
+        config: Simulation configuration including symbol, timeframe, capital, risk
+        
+    Returns:
+        AutoSimResult with equity curve, trades, and detailed decision log
+    """
+    try:
+        result = run_auto_simulation(config)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 if __name__ == "__main__":
     import uvicorn
 
     uvicorn.run("backend.main:app", host="0.0.0.0", port=8001, reload=False)
+
