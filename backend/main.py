@@ -1419,8 +1419,147 @@ def auto_simulate(config: AutoSimConfig):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# =============================================================================
+# Realtime Sim Lab Endpoints
+# =============================================================================
+
+import asyncio
+from contextlib import asynccontextmanager
+from backend.realtime_sim_manager import get_realtime_manager, RealtimeSimManager
+
+
+class StartRealtimeRequest(BaseModel):
+    symbol: str
+    timeframe: str = "1m"
+    initial_capital: float = 100000.0
+    risk_per_trade: float = 0.01
+
+
+class StopRealtimeRequest(BaseModel):
+    session_id: str
+
+
+# Background task handle
+_background_task = None
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Lifespan context manager for FastAPI app."""
+    global _background_task
+    
+    # Startup
+    print("[Lifespan] Starting realtime simulation background loop...")
+    manager = get_realtime_manager()
+    _background_task = asyncio.create_task(
+        manager.start_background_loop(interval_seconds=10.0)
+    )
+    
+    yield
+    
+    # Shutdown
+    print("[Lifespan] Stopping realtime simulation background loop...")
+    manager.stop_background_loop()
+    if _background_task:
+        _background_task.cancel()
+        try:
+            await _background_task
+        except asyncio.CancelledError:
+            pass
+
+
+# Re-register app with lifespan
+app.router.lifespan_context = lifespan
+
+
+@app.post("/realtime-sim/start")
+def start_realtime_simulation(req: StartRealtimeRequest):
+    """
+    Start a new realtime paper trading simulation session.
+    
+    Args:
+        req: Configuration including symbol, timeframe, capital, risk
+        
+    Returns:
+        Dict with session_id
+    """
+    manager = get_realtime_manager()
+    
+    config = AutoSimConfig(
+        symbol=req.symbol,
+        timeframe=req.timeframe,
+        initial_capital=req.initial_capital,
+        risk_per_trade=req.risk_per_trade
+    )
+    
+    session_id = manager.start_session(config)
+    
+    return {
+        "session_id": session_id,
+        "symbol": req.symbol,
+        "timeframe": req.timeframe,
+        "initial_capital": req.initial_capital,
+        "status": "started"
+    }
+
+
+@app.post("/realtime-sim/stop")
+def stop_realtime_simulation(req: StopRealtimeRequest):
+    """
+    Stop a running realtime simulation session.
+    
+    Args:
+        req: Request with session_id
+        
+    Returns:
+        Status message
+    """
+    manager = get_realtime_manager()
+    
+    success = manager.stop_session(req.session_id)
+    
+    if success:
+        return {"session_id": req.session_id, "status": "stopped"}
+    else:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+
+@app.get("/realtime-sim/state")
+def get_realtime_simulation_state(session_id: str):
+    """
+    Get the current state of a realtime simulation session.
+    
+    Args:
+        session_id: Session ID to query
+        
+    Returns:
+        Session state including equity curve, trades, decision log
+    """
+    manager = get_realtime_manager()
+    
+    state = manager.get_state(session_id)
+    
+    if state is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    return state
+
+
+@app.get("/realtime-sim/sessions")
+def list_realtime_sessions():
+    """
+    List all active realtime simulation sessions.
+    
+    Returns:
+        Dict of sessions with basic info
+    """
+    manager = get_realtime_manager()
+    return manager.list_sessions()
+
+
 if __name__ == "__main__":
     import uvicorn
 
     uvicorn.run("backend.main:app", host="0.0.0.0", port=8001, reload=False)
+
 

@@ -3886,14 +3886,32 @@ def render_auto_sim_lab():
     
     This UI allows users to:
     - Configure simulation parameters (symbol, timeframe, capital, risk)
-    - Run automated trading simulation
+    - Run automated trading simulation (Historical or Realtime mode)
     - View equity curve, trades, and decision log
     """
     st.title("🤖 Auto Sim Lab")
     st.caption("Automated Paper Trading Simulation using Final Signal predictors")
     
+    # Mode selector
+    sim_mode = st.radio(
+        "Simulation Mode",
+        ["📊 Historical (Backtest)", "🔴 Realtime (Live)"],
+        horizontal=True,
+        key="auto_sim_mode"
+    )
+    
+    is_realtime = sim_mode == "🔴 Realtime (Live)"
+    
+    if is_realtime:
+        render_auto_sim_realtime()
+    else:
+        render_auto_sim_historical()
+
+
+def render_auto_sim_historical():
+    """Render Historical (backtest) Auto Sim Lab UI."""
     st.markdown("""
-    **Auto Sim Lab** uses the same signal generation logic as Live Signal (Stat, Rule, ML predictors)
+    **Historical Mode** uses the same signal generation logic as Live Signal (Stat, Rule, ML predictors)
     to simulate automated trading on historical data. This helps evaluate how the current signal
     model would have performed in the past.
     """)
@@ -3906,12 +3924,12 @@ def render_auto_sim_lab():
     col1, col2 = st.columns(2)
     
     with col1:
-        symbol = render_symbol_selector(key_prefix="auto_sim", container=st)
+        symbol = render_symbol_selector(key_prefix="auto_sim_hist", container=st)
         timeframe = st.selectbox(
             "Timeframe",
             options=["1d", "1h", "4h", "1wk"],
             index=0,
-            key="auto_sim_timeframe"
+            key="auto_sim_hist_timeframe"
         )
     
     with col2:
@@ -3921,7 +3939,7 @@ def render_auto_sim_lab():
             max_value=10000000.0,
             value=100000.0,
             step=10000.0,
-            key="auto_sim_capital"
+            key="auto_sim_hist_capital"
         )
         risk_pct = st.slider(
             "Risk per Trade (%)",
@@ -3929,15 +3947,15 @@ def render_auto_sim_lab():
             max_value=5.0,
             value=1.0,
             step=0.5,
-            key="auto_sim_risk"
+            key="auto_sim_hist_risk"
         )
     
     col3, col4 = st.columns(2)
     with col3:
-        use_date_range = st.checkbox("Use Date Range", value=False, key="auto_sim_use_date")
+        use_date_range = st.checkbox("Use Date Range", value=False, key="auto_sim_hist_use_date")
         if use_date_range:
-            start_date = st.date_input("Start Date", key="auto_sim_start")
-            end_date = st.date_input("End Date", key="auto_sim_end")
+            start_date = st.date_input("Start Date", key="auto_sim_hist_start")
+            end_date = st.date_input("End Date", key="auto_sim_hist_end")
         else:
             start_date = None
             end_date = None
@@ -3949,20 +3967,20 @@ def render_auto_sim_lab():
             max_value=1000,
             value=200,
             step=50,
-            key="auto_sim_max_bars"
+            key="auto_sim_hist_max_bars"
         )
     
     st.markdown("---")
     
     # Run Simulation
-    if st.button("🚀 Run Auto Simulation", type="primary", use_container_width=True, key="auto_sim_run"):
+    if st.button("🚀 Run Historical Simulation", type="primary", use_container_width=True, key="auto_sim_hist_run"):
         with st.spinner("Running simulation... This may take a moment."):
             try:
                 payload = {
                     "symbol": symbol,
                     "timeframe": timeframe,
                     "initial_capital": initial_capital,
-                    "risk_per_trade": risk_pct / 100.0,  # Convert to decimal
+                    "risk_per_trade": risk_pct / 100.0,
                 }
                 
                 if use_date_range and start_date and end_date:
@@ -3976,7 +3994,7 @@ def render_auto_sim_lab():
                 
                 if response.status_code == 200:
                     result = response.json()
-                    st.session_state["auto_sim_result"] = result
+                    st.session_state["auto_sim_hist_result"] = result
                     st.success(f"Simulation complete! Final Equity: ${result['final_equity']:,.2f}")
                 else:
                     st.error(f"Simulation failed: {response.text}")
@@ -3984,93 +4002,279 @@ def render_auto_sim_lab():
                 st.error(f"Error: {e}")
     
     # Display Results
-    if "auto_sim_result" in st.session_state:
-        result = st.session_state["auto_sim_result"]
+    if "auto_sim_hist_result" in st.session_state:
+        result = st.session_state["auto_sim_hist_result"]
+        _render_auto_sim_results(result, "hist")
+
+
+def render_auto_sim_realtime():
+    """Render Realtime Auto Sim Lab UI with live updates."""
+    
+    st.markdown("""
+    **Realtime Mode** runs a live paper trading simulation using real-time price feeds.
+    The simulation processes market data and generates trading signals continuously.
+    
+    ⚠️ **Note**: Price updates occur every ~10 seconds. This is for demonstration purposes.
+    """)
+    
+    st.markdown("---")
+    
+    # Check for active session
+    active_session = st.session_state.get("realtime_session_id")
+    
+    if active_session:
+        # Active session - show status and controls
+        st.subheader("🔴 Live Session Active")
         
-        st.markdown("---")
-        st.subheader("📊 Results")
-        
-        # Summary Metrics
-        col1, col2, col3, col4 = st.columns(4)
+        # Stop button
+        col1, col2 = st.columns([1, 5])
         with col1:
-            st.metric("Final Equity", f"${result['final_equity']:,.2f}")
-        with col2:
-            delta_color = "normal" if result['total_return_pct'] >= 0 else "inverse"
-            st.metric("Total Return", f"{result['total_return_pct']:+.2f}%")
-        with col3:
-            st.metric("Total Trades", result['summary']['total_trades'])
-        with col4:
-            st.metric("Win Rate", f"{result['summary']['win_rate']:.1f}%")
+            if st.button("⏹️ Stop", type="secondary", key="realtime_stop_btn"):
+                try:
+                    resp = requests.post(
+                        f"{BACKEND_URL}/realtime-sim/stop",
+                        json={"session_id": active_session},
+                        timeout=10
+                    )
+                    if resp.status_code == 200:
+                        st.session_state["realtime_session_id"] = None
+                        st.toast("✅ Session stopped")
+                        st.rerun()
+                    else:
+                        st.error(f"Failed to stop: {resp.text}")
+                except Exception as e:
+                    st.error(f"Error: {e}")
         
-        col5, col6, col7, col8 = st.columns(4)
-        with col5:
-            st.metric("Total PnL", f"${result['summary']['total_pnl']:,.2f}")
-        with col6:
-            st.metric("Avg PnL", f"${result['summary']['avg_pnl']:.2f}")
-        with col7:
-            st.metric("Best Trade", f"${result['summary']['best_trade']:.2f}")
-        with col8:
-            st.metric("Worst Trade", f"${result['summary']['worst_trade']:.2f}")
+        with col2:
+            st.info(f"Session ID: `{active_session}`")
+        
+        # Fetch and display state
+        try:
+            state_resp = requests.get(
+                f"{BACKEND_URL}/realtime-sim/state",
+                params={"session_id": active_session},
+                timeout=10
+            )
+            
+            if state_resp.status_code == 200:
+                state = state_resp.json()
+                
+                # Status metrics
+                st.markdown("---")
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.metric("Symbol", state.get("symbol", "N/A"))
+                with col2:
+                    st.metric("Ticks", state.get("tick_count", 0))
+                with col3:
+                    st.metric("Current Equity", f"${state.get('current_equity', 0):,.2f}")
+                with col4:
+                    ret = state.get("total_return_pct", 0)
+                    st.metric("Return", f"{ret:+.2f}%")
+                
+                # Position info
+                pos = state.get("position", {})
+                if pos.get("side") == "long":
+                    st.success(f"📈 **LONG** {pos.get('size', 0)} shares @ ${pos.get('entry_price', 0):.2f}")
+                else:
+                    st.info("📊 **FLAT** - No open position")
+                
+                # Equity Curve
+                st.subheader("📈 Equity Curve (Live)")
+                if state.get("equity_curve"):
+                    eq_df = pd.DataFrame(state["equity_curve"])
+                    eq_df['timestamp'] = pd.to_datetime(eq_df['timestamp'])
+                    
+                    eq_chart = alt.Chart(eq_df).mark_line(
+                        strokeWidth=2,
+                        color="#FF6B6B"
+                    ).encode(
+                        x=alt.X('timestamp:T', title='Time'),
+                        y=alt.Y('equity:Q', title='Equity ($)', scale=alt.Scale(zero=False))
+                    ).properties(
+                        height=250
+                    )
+                    st.altair_chart(eq_chart, use_container_width=True)
+                
+                # Trades
+                if state.get("trades"):
+                    st.subheader("📋 Trades")
+                    trades_df = pd.DataFrame(state["trades"])
+                    st.dataframe(trades_df, use_container_width=True)
+                
+                # Decision Log (collapsible)
+                with st.expander("📝 Decision Log (Last 50)", expanded=False):
+                    log = state.get("decision_log", [])
+                    if log:
+                        log_df = pd.DataFrame(log)
+                        display_cols = ['timestamp', 'event_type', 'final_signal', 'price', 'reason']
+                        display_cols = [c for c in display_cols if c in log_df.columns]
+                        st.dataframe(log_df[display_cols], use_container_width=True, height=300)
+                    else:
+                        st.info("No events yet.")
+                
+                # Auto-refresh
+                st.caption(f"Last update: {state.get('last_tick_time', 'N/A')}")
+                time.sleep(2)  # Small delay before rerun
+                st.rerun()
+                
+            elif state_resp.status_code == 404:
+                st.warning("Session not found. It may have been stopped.")
+                st.session_state["realtime_session_id"] = None
+                st.rerun()
+            else:
+                st.error(f"Failed to get state: {state_resp.text}")
+                
+        except Exception as e:
+            st.error(f"Error fetching state: {e}")
+    
+    else:
+        # No active session - show configuration
+        st.subheader("⚙️ Configuration")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            symbol = render_symbol_selector(key_prefix="auto_sim_rt", container=st)
+            timeframe = st.selectbox(
+                "Timeframe",
+                options=["1m"],  # Only 1m for realtime (for now)
+                index=0,
+                key="auto_sim_rt_timeframe",
+                help="Currently only 1-minute timeframe is supported for realtime simulation"
+            )
+        
+        with col2:
+            initial_capital = st.number_input(
+                "Initial Capital ($)",
+                min_value=1000.0,
+                max_value=10000000.0,
+                value=100000.0,
+                step=10000.0,
+                key="auto_sim_rt_capital"
+            )
+            risk_pct = st.slider(
+                "Risk per Trade (%)",
+                min_value=0.5,
+                max_value=5.0,
+                value=1.0,
+                step=0.5,
+                key="auto_sim_rt_risk"
+            )
         
         st.markdown("---")
         
-        # Equity Curve
-        st.subheader("📈 Equity Curve")
-        if result['equity_curve']:
-            eq_df = pd.DataFrame(result['equity_curve'])
-            eq_df['timestamp'] = pd.to_datetime(eq_df['timestamp'])
-            
-            eq_chart = alt.Chart(eq_df).mark_line(
-                strokeWidth=2,
-                color="#00D4AA"
-            ).encode(
-                x=alt.X('timestamp:T', title='Date'),
-                y=alt.Y('equity:Q', title='Equity ($)', scale=alt.Scale(zero=False))
-            ).properties(
-                height=300
-            )
-            
-            st.altair_chart(eq_chart, use_container_width=True)
-        else:
-            st.info("No equity curve data available.")
+        # Start button
+        if st.button("🔴 Start Realtime Simulation", type="primary", use_container_width=True, key="realtime_start_btn"):
+            with st.spinner("Starting realtime simulation..."):
+                try:
+                    payload = {
+                        "symbol": symbol,
+                        "timeframe": timeframe,
+                        "initial_capital": initial_capital,
+                        "risk_per_trade": risk_pct / 100.0
+                    }
+                    
+                    resp = requests.post(f"{BACKEND_URL}/realtime-sim/start", json=payload, timeout=10)
+                    
+                    if resp.status_code == 200:
+                        result = resp.json()
+                        st.session_state["realtime_session_id"] = result["session_id"]
+                        st.success(f"Started! Session ID: {result['session_id']}")
+                        st.rerun()
+                    else:
+                        st.error(f"Failed to start: {resp.text}")
+                except Exception as e:
+                    st.error(f"Error: {e}")
+
+
+def _render_auto_sim_results(result: dict, key_suffix: str):
+    """Render Auto Sim results (shared by Historical and Realtime)."""
+    st.markdown("---")
+    st.subheader("📊 Results")
+    
+    # Summary Metrics
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Final Equity", f"${result['final_equity']:,.2f}")
+    with col2:
+        st.metric("Total Return", f"{result['total_return_pct']:+.2f}%")
+    with col3:
+        st.metric("Total Trades", result['summary']['total_trades'])
+    with col4:
+        st.metric("Win Rate", f"{result['summary']['win_rate']:.1f}%")
+    
+    col5, col6, col7, col8 = st.columns(4)
+    with col5:
+        st.metric("Total PnL", f"${result['summary']['total_pnl']:,.2f}")
+    with col6:
+        st.metric("Avg PnL", f"${result['summary']['avg_pnl']:.2f}")
+    with col7:
+        st.metric("Best Trade", f"${result['summary']['best_trade']:.2f}")
+    with col8:
+        st.metric("Worst Trade", f"${result['summary']['worst_trade']:.2f}")
+    
+    st.markdown("---")
+    
+    # Equity Curve
+    st.subheader("📈 Equity Curve")
+    if result['equity_curve']:
+        eq_df = pd.DataFrame(result['equity_curve'])
+        eq_df['timestamp'] = pd.to_datetime(eq_df['timestamp'])
         
-        # Trades Table
-        st.subheader("📋 Trades")
-        if result['trades']:
-            trades_df = pd.DataFrame(result['trades'])
-            st.dataframe(
-                trades_df,
-                use_container_width=True,
-                column_config={
-                    "pnl": st.column_config.NumberColumn("PnL ($)", format="$%.2f"),
-                    "return_pct": st.column_config.NumberColumn("Return (%)", format="%.2f%%"),
-                    "entry_price": st.column_config.NumberColumn("Entry", format="$%.2f"),
-                    "exit_price": st.column_config.NumberColumn("Exit", format="$%.2f"),
-                }
-            )
-        else:
-            st.info("No trades executed during simulation.")
+        eq_chart = alt.Chart(eq_df).mark_line(
+            strokeWidth=2,
+            color="#00D4AA"
+        ).encode(
+            x=alt.X('timestamp:T', title='Date'),
+            y=alt.Y('equity:Q', title='Equity ($)', scale=alt.Scale(zero=False))
+        ).properties(
+            height=300
+        )
         
-        # Decision Log
-        with st.expander("📝 Decision Log", expanded=False):
-            st.caption(f"Total events: {len(result['decision_log'])}")
-            
-            # Filter options
-            event_types = ["all", "signal_decision", "entry", "exit"]
-            selected_type = st.selectbox("Filter by event type:", event_types, key="decision_log_filter")
-            
-            log_events = result['decision_log']
-            if selected_type != "all":
-                log_events = [e for e in log_events if e['event_type'] == selected_type]
-            
-            # Show only essential columns
-            if log_events:
-                log_df = pd.DataFrame(log_events)
-                display_cols = ['timestamp', 'event_type', 'final_signal', 'position_side', 'price', 'reason']
-                display_cols = [c for c in display_cols if c in log_df.columns]
-                st.dataframe(log_df[display_cols], use_container_width=True, height=400)
-            else:
-                st.info("No events match the selected filter.")
+        st.altair_chart(eq_chart, use_container_width=True)
+    else:
+        st.info("No equity curve data available.")
+    
+    # Trades Table
+    st.subheader("📋 Trades")
+    if result['trades']:
+        trades_df = pd.DataFrame(result['trades'])
+        st.dataframe(
+            trades_df,
+            use_container_width=True,
+            column_config={
+                "pnl": st.column_config.NumberColumn("PnL ($)", format="$%.2f"),
+                "return_pct": st.column_config.NumberColumn("Return (%)", format="%.2f%%"),
+                "entry_price": st.column_config.NumberColumn("Entry", format="$%.2f"),
+                "exit_price": st.column_config.NumberColumn("Exit", format="$%.2f"),
+            }
+        )
+    else:
+        st.info("No trades executed during simulation.")
+    
+    # Decision Log
+    with st.expander("📝 Decision Log", expanded=False):
+        st.caption(f"Total events: {len(result['decision_log'])}")
+        
+        event_types = ["all", "signal_decision", "entry", "exit"]
+        selected_type = st.selectbox(
+            "Filter by event type:",
+            event_types,
+            key=f"decision_log_filter_{key_suffix}"
+        )
+        
+        log_events = result['decision_log']
+        if selected_type != "all":
+            log_events = [e for e in log_events if e['event_type'] == selected_type]
+        
+        if log_events:
+            log_df = pd.DataFrame(log_events)
+            display_cols = ['timestamp', 'event_type', 'final_signal', 'position_side', 'price', 'reason']
+            display_cols = [c for c in display_cols if c in log_df.columns]
+            st.dataframe(log_df[display_cols], use_container_width=True, height=400)
+        else:
+            st.info("No events match the selected filter.")
 
 
 # =============================================================================
