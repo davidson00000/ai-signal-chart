@@ -22,3 +22,25 @@
 ---
 
 *これらのドキュメントは "Single Source of Truth" として扱います。*
+
+---
+
+## 📚 このディレクトリ内で AI が読むべき優先順
+
+AI（Antigravity / ChatGPT / Gemini）が specs を読むときの推奨順序は次のとおり：
+
+1. EXITON_AI_DEV_SYSTEM_v1.3_noClaude.md  
+2. DOMAIN_RULES_EXITON_TRADING_v0.1.md  
+3. NFR_EXITON_TRADING_v0.1.md  
+4. APPLY_EXITON_CONSTITUTION_EXITON_TRADING.md  
+5. SAAS_DECISIONS_EXITON_TRADING.md  
+
+この順番で読むことで、
+
+- EXITON 全体の開発憲法
+- トレーディングドメインのルール
+- 非機能要件（性能・ログ・壊れ方）
+- 役割分担（PM / Dev / QA）
+- SaaS 化の方針
+
+を一貫した文脈で理解できるようになる。

@@ -21,3 +21,24 @@
 ---
 
 *各戦略は Strategy Lab および Auto Sim Lab でテスト可能です。*
+
+---
+
+## 🧩 戦略IDの命名規則
+
+戦略IDは次の形式で命名する：
+
+`STR_<カテゴリ>_<3桁連番>`
+
+### 例
+
+- `STR_MA_001` : Moving Average Crossover Basic  
+- `STR_MA_002` : MA Crossover + Filter 条件付き  
+- `STR_RSI_001`: RSI Reversal Basic  
+
+今後、新しい戦略ドキュメントを追加する場合は、
+
+- ファイル名：人間が読んで分かる名前（例: `ma_crossover.md`）
+- 戦略ID：上記ルールに従って本文中で宣言
+
+とする。

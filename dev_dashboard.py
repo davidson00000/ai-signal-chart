@@ -4776,7 +4776,7 @@ def render_multi_symbol_sim():
                     results_list.append({
                         "symbol": symbol,
                         "total_trades": summary.get("total_trades", 0),
-                        "win_rate": summary.get("win_rate", 0) * 100,  # Convert to %
+                        "win_rate": summary.get("win_rate", 0),  # Already in percentage (0-100)
                         "total_r": summary.get("total_r", 0),
                         "avg_r_per_trade": summary.get("avg_r_per_trade", 0),
                         "max_drawdown": summary.get("max_drawdown_percent", 0) * 100,  # Convert to %
@@ -4922,7 +4922,7 @@ def _render_multi_sim_results(result: dict):
             st.metric("Avg Win Rate", f"{avg_win:.1f}%")
         
         with col4:
-            total_trades = sum(r["trades"] for r in successful_results)
+            total_trades = sum(r.get("trades", r.get("total_trades", 0)) for r in successful_results)
             st.metric("Total Trades", total_trades)
         
         # Best/Worst performers

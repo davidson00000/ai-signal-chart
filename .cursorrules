@@ -1,0 +1,22 @@
+
+# EXITON Trading System rules
+
+Before generating any code, you MUST read and comprehend all specification files in /docs/specs/*.md.
+
+Specifications include (but are not limited to):
+- EXITON AI Development Constitution
+- Domain Rules (DR)
+- Non-Functional Requirements (NFR)
+- SaaS Decisions
+- Coding Style (if present)
+
+You must obey these documents as hard constraints.
+
+If your planned changes violate any of these rules, or if the specifications are unclear,
+you MUST stop, explain the conflict, and request clarification instead of guessing.
+
+When working on trading logic (backtesting engine, strategies, risk management, order sizing),
+you are especially responsible for:
+- avoiding look-ahead bias
+- respecting risk limits and kill switches
+- avoiding silent failures
