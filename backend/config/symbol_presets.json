@@ -1,0 +1,44 @@
+{
+    "NVDA": {
+        "predictor": "rule_v2",
+        "timeframe": "1d",
+        "lookback": 200,
+        "min_hold_days": 3,
+        "position_risk_pct": 0.05
+    },
+    "SMCI": {
+        "predictor": "stat",
+        "timeframe": "1d",
+        "lookback": 150,
+        "min_hold_days": 2,
+        "position_risk_pct": 0.03
+    },
+    "TSLA": {
+        "predictor": "rule_v2",
+        "timeframe": "1d",
+        "lookback": 200,
+        "min_hold_days": 5,
+        "position_risk_pct": 0.04
+    },
+    "COIN": {
+        "predictor": "rule_v2",
+        "timeframe": "1d",
+        "lookback": 180,
+        "min_hold_days": 3,
+        "position_risk_pct": 0.03
+    },
+    "MSTR": {
+        "predictor": "rule_v2",
+        "timeframe": "1d",
+        "lookback": 200,
+        "min_hold_days": 5,
+        "position_risk_pct": 0.03
+    },
+    "_default": {
+        "predictor": "rule_v2",
+        "timeframe": "1d",
+        "lookback": 200,
+        "min_hold_days": 3,
+        "position_risk_pct": 0.05
+    }
+}

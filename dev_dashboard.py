@@ -4168,13 +4168,16 @@ def render_auto_sim_historical():
             end_date = None
     
     with col4:
+        # For MA Crossover, recommend using more bars
+        bars_help = "Set to 0 for all available data. MA Crossover (50/60) needs at least 100+ bars for meaningful results."
         max_bars = st.number_input(
             "Max Bars (0 = all available)",
             min_value=0,
             max_value=1000,
-            value=200,
+            value=0,  # Default to all available
             step=50,
-            key="auto_sim_hist_max_bars"
+            key="auto_sim_hist_max_bars",
+            help=bars_help
         )
     
     st.markdown("---")
@@ -4450,26 +4453,34 @@ def _render_auto_sim_results(result: dict, key_suffix: str):
     st.markdown("---")
     st.subheader("📊 Results")
     
-    # Summary Metrics
+    # Get summary with defaults for missing keys
+    summary = result.get('summary', {})
+    
+    # Check for error in summary
+    if 'error' in summary:
+        st.error(f"⚠️ Simulation Error: {summary['error']}")
+        return
+    
+    # Summary Metrics with safe defaults
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        st.metric("Final Equity", f"${result['final_equity']:,.2f}")
+        st.metric("Final Equity", f"${result.get('final_equity', 0):,.2f}")
     with col2:
-        st.metric("Total Return", f"{result['total_return_pct']:+.2f}%")
+        st.metric("Total Return", f"{result.get('total_return_pct', 0):+.2f}%")
     with col3:
-        st.metric("Total Trades", result['summary']['total_trades'])
+        st.metric("Total Trades", summary.get('total_trades', 0))
     with col4:
-        st.metric("Win Rate", f"{result['summary']['win_rate']:.1f}%")
+        st.metric("Win Rate", f"{summary.get('win_rate', 0):.1f}%")
     
     col5, col6, col7, col8 = st.columns(4)
     with col5:
-        st.metric("Total PnL", f"${result['summary']['total_pnl']:,.2f}")
+        st.metric("Total PnL", f"${summary.get('total_pnl', 0):,.2f}")
     with col6:
-        st.metric("Avg PnL", f"${result['summary']['avg_pnl']:.2f}")
+        st.metric("Avg PnL", f"${summary.get('avg_pnl', 0):.2f}")
     with col7:
-        st.metric("Best Trade", f"${result['summary']['best_trade']:.2f}")
+        st.metric("Best Trade", f"${summary.get('best_trade', 0):.2f}")
     with col8:
-        st.metric("Worst Trade", f"${result['summary']['worst_trade']:.2f}")
+        st.metric("Worst Trade", f"${summary.get('worst_trade', 0):.2f}")
     
     st.markdown("---")
     

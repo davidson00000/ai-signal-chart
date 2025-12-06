@@ -227,13 +227,16 @@ def fetch_stock_candles(
     # Calculate start date based on timeframe and desired data points
     if timeframe in ("1m", "5m"):
         # Intraday minute data: limited by Yahoo (max ~7 days)
-        start_dt = end_dt - timedelta(days=7)
+        start_dt = end_dt - timedelta(days=6) # Reduced to 6 to be safe
     elif timeframe in ("15m", "30m", "1h"):
         # Hourly data: try to get ~60 days
-        start_dt = end_dt - timedelta(days=60)
+        start_dt = end_dt - timedelta(days=59) # Reduced to 59 to be safe
     elif timeframe == "4h":
-        # 4-hour approximated with 60m: ~120 days
-        start_dt = end_dt - timedelta(days=120)
+        # 4-hour approximated with 60m: ~120 days (requires multiple fetches or period logic, but 60m limit applies)
+        # Actually 60m data is limited to 730 days (2 years) by Yahoo, but 15m is 60 days.
+        # Let's use 59 days for now to be safe if it falls back to 15m logic, but 4h uses 60m interval.
+        # 60m interval allows 730 days.
+        start_dt = end_dt - timedelta(days=700) 
     else:  # "1d"
         # Daily data: calculate days needed for limit candles
         # Add buffer for weekends/holidays
@@ -252,13 +255,13 @@ def fetch_stock_candles(
     except Exception as e:
         raise HTTPException(
             status_code=400, 
-            detail=f"Failed to fetch stock data: {e}"
+            detail=f"Failed to fetch stock data for {symbol} ({timeframe}): {e}"
         )
 
     if df is None or df.empty:
         raise HTTPException(
             status_code=400, 
-            detail=f"No stock data for symbol: {symbol}"
+            detail=f"No stock data found for {symbol} at {timeframe} timeframe. (Try a larger timeframe or check symbol)"
         )
     
     # Ensure DataFrame is sorted by time (ascending)

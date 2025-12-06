@@ -232,8 +232,28 @@ class BacktestEngine:
             "sharpe_ratio": sharpe_ratio,
         }
 
+        # Prepare price series for charting
+        price_series = []
+        # Reset index to get timestamp as column if it's the index
+        df_reset = candles.reset_index()
+        for _, row in df_reset.iterrows():
+            # Handle different index names or columns
+            ts = row.get("timestamp", row.get("date", row.get("index")))
+            if pd.isna(ts):
+                continue
+                
+            price_series.append({
+                "date": ts.isoformat() if hasattr(ts, "isoformat") else str(ts),
+                "open": row.get("open"),
+                "high": row.get("high"),
+                "low": row.get("low"),
+                "close": row.get("close"),
+                "volume": row.get("volume")
+            })
+
         return {
             "equity_curve": equity_curve,
             "trades": trades,
             "stats": stats,
+            "price_series": price_series
         }

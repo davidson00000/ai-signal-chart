@@ -1,0 +1,41 @@
+INFO:     Started server process [52052]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8001 (Press CTRL+C to quit)
+DEBUG: Initializing MACrossStrategy with params: {'short_window': 20, 'long_window': 100}
+DEBUG: MACrossStrategy.generate_signals called. Short=20, Long=100
+DEBUG: df shape: (482, 6)
+DEBUG: df head:                                  time   open   high    low  close      volume
+timestamp                                                                    
+2024-01-02 00:00:00+00:00  1704153600  12.74  12.75  12.28  12.37  11659200.0
+2024-01-03 00:00:00+00:00  1704240000  11.68  11.97  11.55  11.79  13694100.0
+2024-01-04 00:00:00+00:00  1704326400  11.65  12.17  11.63  11.98   9611900.0
+2024-01-05 00:00:00+00:00  1704412800  11.82  12.16  11.77  11.89   8188700.0
+2024-01-08 00:00:00+00:00  1704672000  11.97  12.58  11.96  12.42  17238700.0
+INFO:     127.0.0.1:53937 - "POST /simulate HTTP/1.1" 200 OK
+DEBUG: Initializing MACrossStrategy with params: {'short_window': 5, 'long_window': 25}
+DEBUG: MACrossStrategy.generate_signals called. Short=5, Long=25
+DEBUG: df shape: (482, 6)
+DEBUG: df head:                                  time   open   high    low  close      volume
+timestamp                                                                    
+2024-01-02 00:00:00+00:00  1704153600  12.74  12.75  12.28  12.37  11659200.0
+2024-01-03 00:00:00+00:00  1704240000  11.68  11.97  11.55  11.79  13694100.0
+2024-01-04 00:00:00+00:00  1704326400  11.65  12.17  11.63  11.98   9611900.0
+2024-01-05 00:00:00+00:00  1704412800  11.82  12.16  11.77  11.89   8188700.0
+2024-01-08 00:00:00+00:00  1704672000  11.97  12.58  11.96  12.42  17238700.0
+INFO:     127.0.0.1:53945 - "POST /simulate HTTP/1.1" 200 OK
+DEBUG: Initializing MACrossStrategy with params: {'short_window': 20, 'long_window': 5}
+DEBUG: MACrossStrategy.generate_signals called. Short=20, Long=5
+DEBUG: df shape: (482, 6)
+DEBUG: df head:                                  time   open   high    low  close      volume
+timestamp                                                                    
+2024-01-02 00:00:00+00:00  1704153600  12.74  12.75  12.28  12.37  11659200.0
+2024-01-03 00:00:00+00:00  1704240000  11.68  11.97  11.55  11.79  13694100.0
+2024-01-04 00:00:00+00:00  1704326400  11.65  12.17  11.63  11.98   9611900.0
+2024-01-05 00:00:00+00:00  1704412800  11.82  12.16  11.77  11.89   8188700.0
+2024-01-08 00:00:00+00:00  1704672000  11.97  12.58  11.96  12.42  17238700.0
+INFO:     127.0.0.1:53980 - "POST /simulate HTTP/1.1" 200 OK
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [52052]

@@ -1,0 +1,58 @@
+INFO:     Started server process [53994]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8001 (Press CTRL+C to quit)
+DEBUG: Initializing MACrossStrategy with params: {'short_window': 20, 'long_window': 5}
+DEBUG: MACrossStrategy.generate_signals called. Short=20, Long=5
+DEBUG: df shape: (482, 6)
+DEBUG: df head:                                  time   open   high    low  close      volume
+timestamp                                                                    
+2024-01-02 00:00:00+00:00  1704153600  12.74  12.75  12.28  12.37  11659200.0
+2024-01-03 00:00:00+00:00  1704240000  11.68  11.97  11.55  11.79  13694100.0
+2024-01-04 00:00:00+00:00  1704326400  11.65  12.17  11.63  11.98   9611900.0
+2024-01-05 00:00:00+00:00  1704412800  11.82  12.16  11.77  11.89   8188700.0
+2024-01-08 00:00:00+00:00  1704672000  11.97  12.58  11.96  12.42  17238700.0
+DEBUG: short_ma tail: timestamp
+2025-11-25 00:00:00+00:00    127.537501
+2025-11-26 00:00:00+00:00    126.707500
+2025-11-28 00:00:00+00:00    126.228500
+2025-12-01 00:00:00+00:00    125.051500
+2025-12-02 00:00:00+00:00    123.995000
+Name: close, dtype: float64
+DEBUG: long_ma tail: timestamp
+2025-11-25 00:00:00+00:00    112.442001
+2025-11-26 00:00:00+00:00    114.450000
+2025-11-28 00:00:00+00:00    118.906001
+2025-12-01 00:00:00+00:00    122.094000
+2025-12-02 00:00:00+00:00    124.289999
+Name: close, dtype: float64
+INFO:     127.0.0.1:54165 - "POST /simulate HTTP/1.1" 200 OK
+DEBUG: Initializing MACrossStrategy with params: {'short_window': 2, 'long_window': 3}
+DEBUG: MACrossStrategy.generate_signals called. Short=2, Long=3
+DEBUG: df shape: (482, 6)
+DEBUG: df head:                                  time   open   high    low  close      volume
+timestamp                                                                    
+2024-01-02 00:00:00+00:00  1704153600  12.74  12.75  12.28  12.37  11659200.0
+2024-01-03 00:00:00+00:00  1704240000  11.68  11.97  11.55  11.79  13694100.0
+2024-01-04 00:00:00+00:00  1704326400  11.65  12.17  11.63  11.98   9611900.0
+2024-01-05 00:00:00+00:00  1704412800  11.82  12.16  11.77  11.89   8188700.0
+2024-01-08 00:00:00+00:00  1704672000  11.97  12.58  11.96  12.42  17238700.0
+DEBUG: short_ma tail: timestamp
+2025-11-25 00:00:00+00:00    115.270000
+2025-11-26 00:00:00+00:00    121.884998
+2025-11-28 00:00:00+00:00    128.345001
+2025-12-01 00:00:00+00:00    125.865002
+2025-12-02 00:00:00+00:00    124.594997
+Name: close, dtype: float64
+DEBUG: long_ma tail: timestamp
+2025-11-25 00:00:00+00:00    112.613335
+2025-11-26 00:00:00+00:00    119.579999
+2025-11-28 00:00:00+00:00    124.086667
+2025-12-01 00:00:00+00:00    126.643333
+2025-12-02 00:00:00+00:00    125.893333
+Name: close, dtype: float64
+INFO:     127.0.0.1:54195 - "POST /simulate HTTP/1.1" 200 OK
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [53994]
