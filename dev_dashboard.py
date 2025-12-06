@@ -4457,30 +4457,65 @@ def render_multi_symbol_sim():
     
     st.markdown("---")
     
-    # Default symbol universe
-    DEFAULT_SYMBOLS = [
-        "AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA", "AMD", "NFLX", "AVGO",
-        "JPM", "V", "UNH", "JNJ", "WMT", "PG", "MA", "HD", "DIS", "PYPL"
-    ]
+    # Universe Presets Definition
+    UNIVERSE_PRESETS = {
+        "Custom (手動入力)": [],
+        "MegaCaps (MAG7)": ["AAPL", "MSFT", "GOOGL", "AMZN", "META", "NVDA", "TSLA"],
+        "US Semiconductors": ["NVDA", "AMD", "AVGO", "TSM", "MU", "ASML", "QCOM", "INTC"],
+        "Kousuke Watchlist v1": ["AAPL", "MSFT", "GOOGL", "AMZN", "META", "NVDA", "TSLA", "AMD", "AVGO", "NFLX"],
+    }
     
     # Configuration
     st.subheader("⚙️ Configuration")
     
+    # Universe Preset Selector
+    preset_options = list(UNIVERSE_PRESETS.keys())
+    default_preset_index = preset_options.index("MegaCaps (MAG7)")
+    
+    # Get previous preset to detect changes
+    prev_preset = st.session_state.get("_prev_multi_sim_preset", None)
+    
+    selected_preset = st.selectbox(
+        "Universe Preset",
+        options=preset_options,
+        index=default_preset_index,
+        key="multi_sim_preset",
+        help="Select a preset symbol list or choose 'Custom' for manual input"
+    )
+    
+    # Update symbols when preset changes
+    if selected_preset != prev_preset and selected_preset != "Custom (手動入力)":
+        preset_symbols = UNIVERSE_PRESETS.get(selected_preset, [])
+        if preset_symbols:
+            st.session_state["multi_sim_symbols_value"] = ", ".join(preset_symbols)
+    
+    # Store current preset for next comparison
+    st.session_state["_prev_multi_sim_preset"] = selected_preset
+    
+    # Default value for symbols
+    default_symbols = UNIVERSE_PRESETS.get("MegaCaps (MAG7)", [])
+    default_symbols_str = ", ".join(default_symbols)
+    
     col1, col2 = st.columns(2)
     
     with col1:
-        # Symbol selection
+        # Symbol selection text area
+        current_symbols_value = st.session_state.get("multi_sim_symbols_value", default_symbols_str)
+        
         symbols_input = st.text_area(
             "Symbols (comma-separated)",
-            value=", ".join(DEFAULT_SYMBOLS[:10]),
+            value=current_symbols_value,
             height=100,
             key="multi_sim_symbols",
-            help="Enter symbols separated by commas"
+            help="Enter symbols separated by commas. Select a preset above to auto-fill."
         )
+        
+        # Update session state with current input
+        st.session_state["multi_sim_symbols_value"] = symbols_input
         
         # Parse symbols
         symbols = [s.strip().upper() for s in symbols_input.split(",") if s.strip()]
-        st.caption(f"Selected: {len(symbols)} symbols")
+        st.caption(f"📊 Selected: {len(symbols)} symbols")
         
         timeframe = st.selectbox(
             "Timeframe",
