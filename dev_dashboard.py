@@ -4771,29 +4771,49 @@ def render_multi_symbol_sim():
                 if resp.status_code == 200:
                     sim_result = resp.json()
                     
-                    # Extract summary for ranking
+                    # Anti Summary: Extract fields from correct locations in API response
+                    # total_return_pct is at top-level, not in summary
+                    # summary contains: total_trades, win_rate, total_r, avg_r, max_drawdown_percent does NOT exist
                     summary = sim_result.get("summary", {})
+                    
+                    # Get total_return_pct from top-level (already in %)
+                    total_return = sim_result.get("total_return_pct", 0)
+                    
+                    # Calculate max_drawdown from equity_curve if available
+                    max_dd = 0.0
+                    equity_curve = sim_result.get("equity_curve", [])
+                    if equity_curve:
+                        max_dd = max(e.get("drawdown", 0) for e in equity_curve)
+                    
                     results_list.append({
                         "symbol": symbol,
                         "total_trades": summary.get("total_trades", 0),
+                        "trades": summary.get("total_trades", 0),  # Alias for compatibility
                         "win_rate": summary.get("win_rate", 0),  # Already in percentage (0-100)
-                        "total_r": summary.get("total_r", 0),
-                        "avg_r_per_trade": summary.get("avg_r_per_trade", 0),
-                        "max_drawdown": summary.get("max_drawdown_percent", 0) * 100,  # Convert to %
-                        "total_return": summary.get("total_return_percent", 0) * 100,  # Convert to %
-                        "status": "success"
+                        "total_r": summary.get("total_r", 0) or 0,
+                        "avg_r": summary.get("avg_r", 0) or 0,  # Backend uses "avg_r"
+                        "avg_r_per_trade": summary.get("avg_r", 0) or 0,  # Alias
+                        "max_drawdown": max_dd,  # Already in % from equity_curve
+                        "max_dd": max_dd,  # Alias
+                        "total_return": total_return,  # Already in % from API
+                        "status": "success",
+                        "error": None
                     })
                     successful += 1
                 else:
                     results_list.append({
                         "symbol": symbol,
                         "total_trades": 0,
+                        "trades": 0,
                         "win_rate": 0,
                         "total_r": 0,
+                        "avg_r": 0,
                         "avg_r_per_trade": 0,
                         "max_drawdown": 0,
+                        "max_dd": 0,
                         "total_return": 0,
-                        "status": "failed"
+                        "status": "failed",
+                        "error": "API returned non-200 status"
                     })
                     failed += 1
                     failed_symbols.append(symbol)
@@ -4802,12 +4822,16 @@ def render_multi_symbol_sim():
                 results_list.append({
                     "symbol": symbol,
                     "total_trades": 0,
+                    "trades": 0,
                     "win_rate": 0,
                     "total_r": 0,
+                    "avg_r": 0,
                     "avg_r_per_trade": 0,
                     "max_drawdown": 0,
+                    "max_dd": 0,
                     "total_return": 0,
-                    "status": "error"
+                    "status": "error",
+                    "error": str(e)
                 })
                 failed += 1
                 failed_symbols.append(symbol)
@@ -4859,11 +4883,15 @@ def _render_multi_sim_results(result: dict):
         st.warning("No results to display")
         return
     
+    # Add rank column
+    for i, r in enumerate(results_list):
+        r["rank"] = i + 1
+    
     # Create DataFrame
     df = pd.DataFrame(results_list)
     
-    # Column order and formatting
-    display_cols = ["rank", "symbol", "total_return", "total_r", "avg_r", "win_rate", "max_dd", "trades", "error"]
+    # Column order and formatting - Anti Summary: using correct aliases
+    display_cols = ["rank", "symbol", "total_return", "total_r", "avg_r", "win_rate", "max_dd", "trades"]
     display_cols = [c for c in display_cols if c in df.columns]
     
     df_display = df[display_cols].copy()
@@ -4877,8 +4905,7 @@ def _render_multi_sim_results(result: dict):
         "avg_r": "Avg R",
         "win_rate": "Win Rate %",
         "max_dd": "Max DD %",
-        "trades": "Trades",
-        "error": "Error"
+        "trades": "Trades"
     })
     
     # Display table (no conditional formatting for dark mode compatibility)
@@ -4898,8 +4925,8 @@ def _render_multi_sim_results(result: dict):
         }
     )
     
-    # Summary stats
-    successful_results = [r for r in results_list if r.get("error") is None]
+    # Summary stats - Anti Summary: filter by status == 'success'
+    successful_results = [r for r in results_list if r.get("status") == "success"]
     
     if successful_results:
         st.markdown("---")
