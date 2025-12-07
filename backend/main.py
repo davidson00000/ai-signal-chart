@@ -1065,6 +1065,109 @@ async def get_live_signal_endpoint() -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/live-signals")
+async def get_live_signals_endpoint(
+    symbols: str = "AAPL,MSFT,GOOGL",
+    strategy: str = "ma_cross"
+) -> List[Dict[str, Any]]:
+    """
+    Get live trading signals for multiple symbols (mobile view optimized).
+    
+    Args:
+        symbols: Comma-separated list of symbols (default: "AAPL,MSFT,GOOGL")
+        strategy: Strategy type (default: "ma_cross")
+    
+    Returns:
+        List of signal dictionaries with explain information
+    """
+    try:
+        import pandas as pd
+        import numpy as np
+        from datetime import datetime, timedelta
+        
+        symbol_list = [s.strip() for s in symbols.split(",")]
+        results = []
+        
+        # Default strategy parameters
+        if strategy == "ma_cross":
+            from backend.strategies.ma_cross import MACrossStrategy
+            strategy_obj = MACrossStrategy(short_window=9, long_window=21)
+        elif strategy == "rsi_mean_reversion":
+            from backend.strategies.rsi_mean_reversion import RSIMeanReversionStrategy
+            strategy_obj = RSIMeanReversionStrategy(period=14, oversold=30, overbought=70)
+        elif strategy == "macd_trend":
+            from backend.strategies.macd_trend import MACDTrendStrategy
+            strategy_obj = MACDTrendStrategy(fast_period=12, slow_period=26, signal_period=9)
+        else:
+            raise HTTPException(status_code=400, detail=f"Unknown strategy: {strategy}")
+        
+        for symbol in symbol_list:
+            try:
+                # Fetch data
+                start_date = (datetime.now() - timedelta(days=365)).strftime("%Y-%m-%d")
+                candles = data_feed.get_chart_data(symbol, "1d", limit=500, start=start_date)
+                
+                if not candles or len(candles) < 50:
+                    continue
+                
+                df = pd.DataFrame(candles)
+                if "time" in df.columns:
+                    df["timestamp"] = pd.to_datetime(df["time"], unit="s")
+                    df.set_index("timestamp", inplace=True)
+                
+                df = df.sort_index()
+                
+                # Generate signals
+                signals = strategy_obj.generate_signals(df)
+                
+                # Get latest signal
+                latest_idx = len(df) - 1
+                latest_signal_value = signals.iloc[latest_idx]
+                
+                # Determine side
+                if latest_signal_value == 1:
+                    side = "BUY"
+                elif latest_signal_value == -1 or latest_signal_value == 0:
+                    side = "SELL"
+                else:
+                    side = "HOLD"
+                
+                # Get explain information
+                explain_data = strategy_obj.explain(df, latest_idx)
+                
+                # Create reason summary
+                conditions = explain_data.get("conditions_triggered", [])
+                reason_summary = " + ".join(conditions[:2]) if conditions else "No specific conditions"
+                
+                # Get latest price and time
+                latest_price = float(df["close"].iloc[latest_idx])
+                latest_time = df.index[latest_idx].isoformat()
+                
+                results.append({
+                    "symbol": symbol,
+                    "side": side,
+                    "price": round(latest_price, 2),
+                    "time": latest_time,
+                    "confidence": explain_data.get("confidence", 0.5),
+                    "reason_summary": reason_summary,
+                    "explain": explain_data
+                })
+                
+            except Exception as e:
+                # Skip symbols with errors
+                print(f"Error processing {symbol}: {str(e)}")
+                continue
+        
+        return results
+        
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Live signals generation failed: {str(e)}")
+
+
 @app.get("/rule_predictor_v2")
 async def get_rule_predictor_v2(symbol: str) -> Dict[str, Any]:
     """
