@@ -26,6 +26,47 @@ class MACrossStrategy(StrategyBase):
         
         return pd.Series(signals, index=df.index)
 
+    def explain(self, df: pd.DataFrame, idx: int) -> Dict[str, Any]:
+        """Explain the MA crossover signal at a given index."""
+        short_ma = df['close'].rolling(window=self.short_window).mean()
+        long_ma = df['close'].rolling(window=self.long_window).mean()
+        
+        short_val = float(short_ma.iloc[idx]) if not pd.isna(short_ma.iloc[idx]) else 0.0
+        long_val = float(long_ma.iloc[idx]) if not pd.isna(long_ma.iloc[idx]) else 0.0
+        close_val = float(df['close'].iloc[idx])
+        
+        # Check conditions
+        conditions = []
+        if short_val > long_val:
+            conditions.append(f"Short MA ({self.short_window}) > Long MA ({self.long_window})")
+        else:
+            conditions.append(f"Short MA ({self.short_window}) < Long MA ({self.long_window})")
+        
+        # Check for crossover (if previous bar had opposite condition)
+        if idx > 0:
+            prev_short = short_ma.iloc[idx - 1]
+            prev_long = long_ma.iloc[idx - 1]
+            if not pd.isna(prev_short) and not pd.isna(prev_long):
+                if prev_short <= prev_long and short_val > long_val:
+                    conditions.append("Golden Cross (bullish crossover)")
+                elif prev_short >= prev_long and short_val < long_val:
+                    conditions.append("Death Cross (bearish crossover)")
+        
+        # Calculate confidence based on MA spread
+        ma_spread = abs(short_val - long_val) / close_val if close_val > 0 else 0
+        confidence = min(0.95, 0.5 + ma_spread * 10)  # Scale spread to confidence
+        
+        return {
+            "indicators": {
+                "short_ma": round(short_val, 2),
+                "long_ma": round(long_val, 2),
+                "close": round(close_val, 2),
+                "ma_spread_pct": round(ma_spread * 100, 2)
+            },
+            "conditions_triggered": conditions,
+            "confidence": round(confidence, 2)
+        }
+
     @classmethod
     def get_params_schema(cls) -> Dict[str, Any]:
         return {

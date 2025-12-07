@@ -39,6 +39,48 @@ class RSIMeanReversionStrategy(StrategyBase):
         
         return signals
 
+    def explain(self, df: pd.DataFrame, idx: int) -> Dict[str, Any]:
+        """Explain the RSI mean reversion signal at a given index."""
+        # Calculate RSI
+        delta = df['close'].diff()
+        gain = (delta.where(delta > 0, 0)).rolling(window=self.period).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=self.period).mean()
+        
+        rs = gain / loss
+        rsi = 100 - (100 / (1 + rs))
+        
+        rsi_val = float(rsi.iloc[idx]) if not pd.isna(rsi.iloc[idx]) else 50.0
+        close_val = float(df['close'].iloc[idx])
+        
+        # Check conditions
+        conditions = []
+        if rsi_val < self.oversold:
+            conditions.append(f"RSI ({rsi_val:.1f}) < Oversold ({self.oversold}) - BUY signal")
+        elif rsi_val > self.overbought:
+            conditions.append(f"RSI ({rsi_val:.1f}) > Overbought ({self.overbought}) - EXIT signal")
+        else:
+            conditions.append(f"RSI ({rsi_val:.1f}) is neutral (between {self.oversold} and {self.overbought})")
+        
+        # Calculate confidence based on distance from thresholds
+        if rsi_val < self.oversold:
+            confidence = 0.5 + (self.oversold - rsi_val) / self.oversold * 0.4
+        elif rsi_val > self.overbought:
+            confidence = 0.5 + (rsi_val - self.overbought) / (100 - self.overbought) * 0.4
+        else:
+            confidence = 0.5
+        
+        return {
+            "indicators": {
+                "rsi": round(rsi_val, 2),
+                "close": round(close_val, 2),
+                "rsi_period": self.period,
+                "oversold_level": self.oversold,
+                "overbought_level": self.overbought
+            },
+            "conditions_triggered": conditions,
+            "confidence": round(min(0.95, confidence), 2)
+        }
+
     @classmethod
     def get_params_schema(cls) -> Dict[str, Any]:
         return {

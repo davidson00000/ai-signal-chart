@@ -51,3 +51,29 @@ class BollingerStrategy(BaseStrategy):
             "lower": curr_lower,
             "reason": reason
         }
+
+    def generate_signals(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Generate signals for the entire DataFrame at once.
+        """
+        df = df.copy()
+        
+        # Calculate Bollinger Bands
+        df['mid'] = df['close'].rolling(window=self.period).mean()
+        df['std'] = df['close'].rolling(window=self.period).std()
+        df['upper'] = df['mid'] + (df['std'] * self.std_dev)
+        df['lower'] = df['mid'] - (df['std'] * self.std_dev)
+        
+        # Generate Signals
+        df['signal'] = 0
+        
+        # Buy when Close < Lower Band
+        buy_cond = df['close'] < df['lower']
+        
+        # Sell when Close >= Mid Band
+        sell_cond = df['close'] >= df['mid']
+        
+        df.loc[buy_cond, 'signal'] = 1
+        df.loc[sell_cond, 'signal'] = -1
+        
+        return df

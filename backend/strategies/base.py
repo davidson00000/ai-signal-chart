@@ -25,6 +25,24 @@ class StrategyBase(ABC):
         """
         pass
 
+    def explain(self, df: pd.DataFrame, idx: int) -> Dict[str, Any]:
+        """
+        Explain the signal at a given index.
+        
+        Args:
+            df (pd.DataFrame): Historical price data.
+            idx (int): Index in the dataframe to explain.
+            
+        Returns:
+            Dict with 'indicators', 'conditions_triggered', and 'confidence'.
+        """
+        # Default implementation returns empty explanation
+        return {
+            "indicators": {},
+            "conditions_triggered": [],
+            "confidence": 0.5
+        }
+
     @classmethod
     @abstractmethod
     def get_params_schema(cls) -> Dict[str, Any]:

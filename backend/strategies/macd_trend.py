@@ -28,6 +28,60 @@ class MACDTrendStrategy(StrategyBase):
         
         return pd.Series(signals, index=df.index)
 
+    def explain(self, df: pd.DataFrame, idx: int) -> Dict[str, Any]:
+        """Explain the MACD trend signal at a given index."""
+        # Calculate MACD
+        ema_fast = df['close'].ewm(span=self.fast_period, adjust=False).mean()
+        ema_slow = df['close'].ewm(span=self.slow_period, adjust=False).mean()
+        macd_line = ema_fast - ema_slow
+        signal_line = macd_line.ewm(span=self.signal_period, adjust=False).mean()
+        histogram = macd_line - signal_line
+        
+        macd_val = float(macd_line.iloc[idx]) if not pd.isna(macd_line.iloc[idx]) else 0.0
+        signal_val = float(signal_line.iloc[idx]) if not pd.isna(signal_line.iloc[idx]) else 0.0
+        hist_val = float(histogram.iloc[idx]) if not pd.isna(histogram.iloc[idx]) else 0.0
+        close_val = float(df['close'].iloc[idx])
+        
+        # Check conditions
+        conditions = []
+        if macd_val > signal_val:
+            conditions.append("MACD Line > Signal Line - Bullish")
+        else:
+            conditions.append("MACD Line < Signal Line - Bearish")
+        
+        if hist_val > 0:
+            conditions.append("MACD Histogram positive")
+        else:
+            conditions.append("MACD Histogram negative")
+        
+        # Check for crossover
+        if idx > 0:
+            prev_macd = macd_line.iloc[idx - 1]
+            prev_signal = signal_line.iloc[idx - 1]
+            if not pd.isna(prev_macd) and not pd.isna(prev_signal):
+                if prev_macd <= prev_signal and macd_val > signal_val:
+                    conditions.append("MACD bullish crossover")
+                elif prev_macd >= prev_signal and macd_val < signal_val:
+                    conditions.append("MACD bearish crossover")
+        
+        # Calculate confidence based on histogram strength
+        close_range = df['close'].rolling(20).std().iloc[idx] if idx >= 20 else df['close'].std()
+        if not pd.isna(close_range) and close_range > 0:
+            confidence = min(0.95, 0.5 + abs(hist_val) / close_range * 2)
+        else:
+            confidence = 0.5
+        
+        return {
+            "indicators": {
+                "macd_line": round(macd_val, 4),
+                "signal_line": round(signal_val, 4),
+                "histogram": round(hist_val, 4),
+                "close": round(close_val, 2)
+            },
+            "conditions_triggered": conditions,
+            "confidence": round(confidence, 2)
+        }
+
     @classmethod
     def get_params_schema(cls) -> Dict[str, Any]:
         return {

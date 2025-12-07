@@ -71,3 +71,42 @@ class EmaCrossoverStrategy(BaseStrategy):
             "ema_long": curr_long,
             "reason": reason
         }
+
+    def generate_signals(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Generate signals for the entire DataFrame at once.
+        
+        Returns:
+            DataFrame with 'signal' column (1: Buy, -1: Sell, 0: Hold)
+            and indicator columns.
+        """
+        df = df.copy()
+        
+        # Calculate EMAs
+        df['ema_short'] = df['close'].ewm(span=self.short_window, adjust=False).mean()
+        df['ema_long'] = df['close'].ewm(span=self.long_window, adjust=False).mean()
+        
+        # Generate Signals
+        # 1 where short > long, -1 where short < long
+        # We use crossover logic: 
+        # Buy when short crosses above long (prev short <= prev long AND curr short > curr long)
+        # Sell when short crosses below long (prev short >= prev long AND curr short < curr long)
+        
+        df['signal'] = 0
+        
+        # Vectorized crossover detection
+        # Condition: Short > Long
+        bullish = df['ema_short'] > df['ema_long']
+        bearish = df['ema_short'] < df['ema_long']
+        
+        # Crossover
+        # Bullish Crossover: Bullish now AND Bearish/Neutral before
+        crossover_bull = bullish & (~bullish.shift(1).fillna(False))
+        
+        # Bearish Crossover: Bearish now AND Bullish/Neutral before
+        crossover_bear = bearish & (~bearish.shift(1).fillna(False))
+        
+        df.loc[crossover_bull, 'signal'] = 1
+        df.loc[crossover_bear, 'signal'] = -1
+        
+        return df

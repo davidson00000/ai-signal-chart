@@ -349,6 +349,44 @@ async def run_simulation(request: BacktestRequest):
                 item["ma_long"] = row["ma_long"]
             price_series.append(item)
 
+        # Generate signals with explanations (Explainability Layer)
+        signals_with_explain = []
+        try:
+            # Generate signals from strategy
+            raw_signals = strategy.generate_signals(df)
+            
+            # Find signal changes (entries/exits)
+            signal_changes = raw_signals.diff().fillna(0)
+            
+            for i, (idx, change) in enumerate(signal_changes.items()):
+                if change != 0:  # Signal changed
+                    curr_signal = raw_signals.iloc[raw_signals.index.get_loc(idx)]
+                    
+                    # Determine signal type
+                    if curr_signal == 1:
+                        sig_type = "BUY"
+                    elif curr_signal == -1 or curr_signal == 0:
+                        sig_type = "SELL"
+                    else:
+                        continue
+                    
+                    # Get explanation
+                    iloc_idx = raw_signals.index.get_loc(idx)
+                    explain_data = strategy.explain(df, iloc_idx)
+                    
+                    signals_with_explain.append({
+                        "index": iloc_idx,
+                        "date": idx.isoformat() if hasattr(idx, 'isoformat') else str(idx),
+                        "type": sig_type,
+                        "price": float(df['close'].iloc[iloc_idx]),
+                        "explain": explain_data
+                    })
+        except Exception as e:
+            # If signal generation fails, continue without signals
+            import traceback
+            traceback.print_exc()
+            pass
+
         return BacktestResponse(
             symbol=request.symbol,
             timeframe=request.timeframe,
@@ -357,7 +395,8 @@ async def run_simulation(request: BacktestRequest):
             trades=result["trades"],
             metrics=result["stats"],
             data_points=len(df),
-            price_series=price_series
+            price_series=price_series,
+            signals=signals_with_explain
         )
 
     except ValueError as e:
@@ -1431,7 +1470,10 @@ app.include_router(paper_router)
 # Auto Sim Lab Endpoints
 # =============================================================================
 
-from backend.auto_sim_lab import AutoSimConfig, AutoSimResult, run_auto_simulation
+from backend.auto_sim_lab import (
+    AutoSimConfig, AutoSimResult, run_auto_simulation,
+    StrategySweepRequest, StrategySweepResult, run_strategy_sweep
+)
 
 
 @app.post("/auto-simulate", response_model=AutoSimResult)
@@ -1453,6 +1495,90 @@ def auto_simulate(config: AutoSimConfig):
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/auto-sim/sweep")
+def run_auto_sim_sweep(request: StrategySweepRequest):
+    """
+    Start Strategy Sweep in a background thread and return immediately.
+    Results can be fetched via /auto-sim/sweep-result.
+    Progress is available via /auto-sim/progress.
+    """
+    from backend.auto_sim_lab import (
+        run_strategy_sweep, SWEEP_PROGRESS, SWEEP_RESULTS, SWEEP_THREAD
+    )
+    import backend.auto_sim_lab as auto_sim_lab
+    import threading
+    
+    # If previous sweep is still running, return 400
+    if auto_sim_lab.SWEEP_THREAD is not None and auto_sim_lab.SWEEP_THREAD.is_alive():
+        raise HTTPException(status_code=400, detail="Strategy sweep is already running.")
+    
+    # Reset results and progress
+    auto_sim_lab.SWEEP_RESULTS = None
+    
+    total_configs = len(request.symbols) * len(request.strategies)
+    auto_sim_lab.SWEEP_PROGRESS["total"] = total_configs
+    auto_sim_lab.SWEEP_PROGRESS["processed"] = 0
+    auto_sim_lab.SWEEP_PROGRESS["percent"] = 0.0
+    auto_sim_lab.SWEEP_PROGRESS["status"] = "running"
+    auto_sim_lab.SWEEP_PROGRESS["last_symbol"] = ""
+    auto_sim_lab.SWEEP_PROGRESS["last_strategy"] = ""
+    auto_sim_lab.SWEEP_PROGRESS["error"] = None
+    
+    def worker():
+        try:
+            results = run_strategy_sweep(request)
+            # Convert Pydantic models to dicts for JSON response
+            auto_sim_lab.SWEEP_RESULTS = [r.dict() if hasattr(r, "dict") else r for r in results]
+            auto_sim_lab.SWEEP_PROGRESS["status"] = "completed"
+            auto_sim_lab.SWEEP_PROGRESS["percent"] = 100.0
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            auto_sim_lab.SWEEP_RESULTS = None
+            auto_sim_lab.SWEEP_PROGRESS["status"] = "error"
+            auto_sim_lab.SWEEP_PROGRESS["error"] = str(e)
+    
+    auto_sim_lab.SWEEP_THREAD = threading.Thread(target=worker, daemon=True)
+    auto_sim_lab.SWEEP_THREAD.start()
+    
+    return {"status": "started", "total": total_configs}
+
+
+@app.get("/auto-sim/sweep-result")
+def get_auto_sim_sweep_result():
+    """
+    Return the latest sweep results if available.
+    """
+    import backend.auto_sim_lab as auto_sim_lab
+    
+    status = auto_sim_lab.SWEEP_PROGRESS.get("status", "idle")
+    
+    if status == "running":
+        return {"status": "running", "results": None}
+    
+    if status == "error":
+        return {
+            "status": "error",
+            "error": auto_sim_lab.SWEEP_PROGRESS.get("error", "Unknown error"),
+            "results": None,
+        }
+    
+    if auto_sim_lab.SWEEP_RESULTS is None:
+        return {"status": "idle", "results": None}
+    
+    return {
+        "status": "completed",
+        "results": auto_sim_lab.SWEEP_RESULTS,
+    }
+
+
+@app.get("/auto-sim/progress")
+def get_auto_sim_progress():
+    """Get progress of the current Strategy Sweep."""
+    from backend.auto_sim_lab import SWEEP_PROGRESS
+    return SWEEP_PROGRESS
 
 
 # Multi-Symbol Simulation

@@ -18,6 +18,7 @@ import altair as alt
 from datetime import datetime, timedelta
 import uuid
 import time
+from concurrent.futures import ThreadPoolExecutor
 from strategy_guides import STRATEGY_GUIDES
 
 # ============================================================================
@@ -3936,7 +3937,7 @@ def render_auto_sim_lab():
     # Mode selector
     sim_mode = st.radio(
         "Simulation Mode",
-        ["📊 Historical (Backtest)", "🌐 Multi-Symbol", "🔴 Realtime (Live)"],
+        ["📊 Historical (Backtest)", "🌐 Multi-Symbol", "🧹 Strategy Sweep", "🔴 Realtime (Live)"],
         horizontal=True,
         key="auto_sim_mode"
     )
@@ -3945,6 +3946,8 @@ def render_auto_sim_lab():
         render_auto_sim_realtime()
     elif sim_mode == "🌐 Multi-Symbol":
         render_multi_symbol_sim()
+    elif sim_mode == "🧹 Strategy Sweep":
+        render_strategy_sweep_ui()
     else:
         render_auto_sim_historical()
 
@@ -4901,6 +4904,26 @@ def render_multi_symbol_sim():
                     # summary contains: total_trades, win_rate, total_r, avg_r, max_drawdown_percent does NOT exist
                     summary = sim_result.get("summary", {})
                     
+                    # Check for backend error
+                    if "error" in summary:
+                        results_list.append({
+                            "symbol": symbol,
+                            "total_trades": 0,
+                            "trades": 0,
+                            "win_rate": 0,
+                            "total_r": 0,
+                            "avg_r": 0,
+                            "avg_r_per_trade": 0,
+                            "max_drawdown": 0,
+                            "max_dd": 0,
+                            "total_return": 0,
+                            "status": "failed",
+                            "error": summary["error"]
+                        })
+                        failed += 1
+                        failed_symbols.append(symbol)
+                        continue
+                    
                     # Get total_return_pct from top-level (already in %)
                     total_return = sim_result.get("total_return_pct", 0)
                     
@@ -4938,7 +4961,7 @@ def render_multi_symbol_sim():
                         "max_dd": 0,
                         "total_return": 0,
                         "status": "failed",
-                        "error": "API returned non-200 status"
+                        "error": f"API Error: {resp.status_code} - {resp.text}"
                     })
                     failed += 1
                     failed_symbols.append(symbol)
@@ -5016,7 +5039,7 @@ def _render_multi_sim_results(result: dict):
     df = pd.DataFrame(results_list)
     
     # Column order and formatting - Anti Summary: using correct aliases
-    display_cols = ["rank", "symbol", "total_return", "total_r", "avg_r", "win_rate", "max_dd", "trades"]
+    display_cols = ["rank", "symbol", "total_return", "total_r", "avg_r", "win_rate", "max_dd", "trades", "error"]
     display_cols = [c for c in display_cols if c in df.columns]
     
     df_display = df[display_cols].copy()
@@ -5093,6 +5116,369 @@ def _render_multi_sim_results(result: dict):
             bottom3 = successful_results[-3:][::-1]
             for i, r in enumerate(bottom3):
                 st.markdown(f"**{r['symbol']}**: {r['total_r']:.2f}R ({r['total_return']:+.1f}%)" if r.get('total_r') else f"**{r['symbol']}**: {r['total_return']:+.1f}%")
+
+
+def render_strategy_sweep_ui():
+    """Render Strategy Sweep UI."""
+    st.markdown("""
+    **Strategy Sweep Mode** runs multiple strategies across multiple symbols.
+    It helps identify the best strategy-symbol combinations.
+    """)
+    st.markdown("---")
+    
+    # --- Universe Selection (Simplified Copy) ---
+    try:
+        resp = requests.get(f"{BACKEND_URL}/symbol-universes", timeout=5)
+        api_universes = resp.json() if resp.status_code == 200 else {}
+    except:
+        api_universes = {}
+        
+    universe_options = {"custom": {"label": "Custom", "symbols": []}}
+    universe_options.update(api_universes)
+    
+    # Initialize session state for sweep universe
+    if "_sweep_universe_preset" not in st.session_state:
+        st.session_state["_sweep_universe_preset"] = "mega_caps" if "mega_caps" in universe_options else "custom"
+        st.session_state["_sweep_symbols"] = universe_options.get("mega_caps", {}).get("symbols", ["AAPL", "MSFT"])
+
+    # Universe Selector
+    u_keys = list(universe_options.keys())
+    u_labels = [universe_options[k]["label"] for k in u_keys]
+    
+    curr_preset = st.session_state["_sweep_universe_preset"]
+    curr_idx = u_keys.index(curr_preset) if curr_preset in u_keys else 0
+    
+    sel_idx = st.selectbox(
+        "Universe Preset", 
+        range(len(u_labels)), 
+        format_func=lambda i: u_labels[i], 
+        index=curr_idx,
+        key="sweep_univ_select"
+    )
+    sel_key = u_keys[sel_idx]
+    
+    # Update symbols if preset changed
+    if sel_key != st.session_state["_sweep_universe_preset"]:
+        st.session_state["_sweep_universe_preset"] = sel_key
+        if sel_key != "custom":
+            st.session_state["_sweep_symbols"] = universe_options[sel_key]["symbols"]
+            st.rerun()
+
+    # Symbol Input
+    symbols_str = ", ".join(st.session_state["_sweep_symbols"])
+    is_custom = (sel_key == "custom")
+    
+    symbols_input = st.text_area(
+        "Symbols", 
+        value=symbols_str, 
+        disabled=not is_custom,
+        key="sweep_symbols_input"
+    )
+    
+    if is_custom:
+        st.session_state["_sweep_symbols"] = [s.strip().upper() for s in symbols_input.split(",") if s.strip()]
+    
+    symbols = st.session_state["_sweep_symbols"]
+    st.caption(f"Selected: {len(symbols)} symbols")
+    
+    st.markdown("---")
+    
+    # --- Strategy Configuration ---
+    st.subheader("⚙️ Strategy Configuration")
+    
+    available_strategies = {
+        "ma_crossover": "MA Crossover",
+        "rsi_mean_reversion": "RSI Mean Reversion",
+        "ema_crossover": "EMA Crossover",
+        "macd": "MACD",
+        "breakout": "Breakout",
+        "bollinger": "Bollinger"
+    }
+    
+    selected_strategies = st.multiselect(
+        "Select Strategies to Sweep",
+        options=list(available_strategies.keys()),
+        format_func=lambda x: available_strategies[x],
+        default=["ma_crossover", "rsi_mean_reversion"],
+        key="sweep_strategies"
+    )
+    
+    sweep_configs = []
+    
+    if selected_strategies:
+        st.markdown("##### Parameter Presets")
+        
+        for strat in selected_strategies:
+            with st.expander(f"🔧 {available_strategies[strat]} Presets", expanded=True):
+                if strat == "ma_crossover":
+                    presets = {
+                        "fast": {"label": "Fast (10/20)", "short": 10, "long": 20},
+                        "medium": {"label": "Medium (20/50)", "short": 20, "long": 50},
+                        "slow": {"label": "Slow (50/200)", "short": 50, "long": 200},
+                        "golden": {"label": "Golden Cross (50/200)", "short": 50, "long": 200} 
+                    }
+                    selected_presets = st.multiselect(
+                        f"Presets for {available_strategies[strat]}",
+                        options=list(presets.keys()),
+                        format_func=lambda x: presets[x]["label"],
+                        default=["medium"],
+                        key=f"sweep_preset_{strat}"
+                    )
+                    for p in selected_presets:
+                        sweep_configs.append({
+                            "strategy_mode": "ma_crossover",
+                            "label": f"MA {presets[p]['label']}",
+                            "ma_short_window": presets[p]["short"],
+                            "ma_long_window": presets[p]["long"]
+                        })
+                        
+                elif strat == "rsi_mean_reversion":
+                    presets = {
+                        "conservative": {"label": "Conservative (14, 30/70)", "period": 14, "os": 30, "ob": 70},
+                        "aggressive": {"label": "Aggressive (7, 20/80)", "period": 7, "os": 20, "ob": 80},
+                        "balanced": {"label": "Balanced (14, 35/65)", "period": 14, "os": 35, "ob": 65}
+                    }
+                    selected_presets = st.multiselect(
+                        f"Presets for {available_strategies[strat]}",
+                        options=list(presets.keys()),
+                        format_func=lambda x: presets[x]["label"],
+                        default=["conservative"],
+                        key=f"sweep_preset_{strat}"
+                    )
+                    for p in selected_presets:
+                        sweep_configs.append({
+                            "strategy_mode": "rsi_mean_reversion",
+                            "label": f"RSI {presets[p]['label']}",
+                            "rsi_period": presets[p]["period"],
+                            "rsi_oversold": presets[p]["os"],
+                            "rsi_overbought": presets[p]["ob"]
+                        })
+                
+                elif strat == "ema_crossover":
+                    presets = {
+                        "standard": {"label": "Standard (12/26)", "short": 12, "long": 26},
+                        "fast": {"label": "Fast (9/21)", "short": 9, "long": 21}
+                    }
+                    selected_presets = st.multiselect(
+                        f"Presets for {available_strategies[strat]}",
+                        options=list(presets.keys()),
+                        format_func=lambda x: presets[x]["label"],
+                        default=["standard"],
+                        key=f"sweep_preset_{strat}"
+                    )
+                    for p in selected_presets:
+                        sweep_configs.append({
+                            "strategy_mode": "ema_crossover",
+                            "label": f"EMA {presets[p]['label']}",
+                            "ema_short": presets[p]["short"],
+                            "ema_long": presets[p]["long"]
+                        })
+
+                elif strat == "macd":
+                    presets = {
+                        "standard": {"label": "Standard (12, 26, 9)", "fast": 12, "slow": 26, "sig": 9},
+                        "fast": {"label": "Fast (6, 13, 4)", "fast": 6, "slow": 13, "sig": 4}
+                    }
+                    selected_presets = st.multiselect(
+                        f"Presets for {available_strategies[strat]}",
+                        options=list(presets.keys()),
+                        format_func=lambda x: presets[x]["label"],
+                        default=["standard"],
+                        key=f"sweep_preset_{strat}"
+                    )
+                    for p in selected_presets:
+                        sweep_configs.append({
+                            "strategy_mode": "macd",
+                            "label": f"MACD {presets[p]['label']}",
+                            "macd_fast": presets[p]["fast"],
+                            "macd_slow": presets[p]["slow"],
+                            "macd_signal": presets[p]["sig"]
+                        })
+
+                else:
+                    st.info(f"Default parameters will be used for {available_strategies[strat]}")
+                    sweep_configs.append({
+                        "strategy_mode": strat,
+                        "label": available_strategies[strat]
+                    })
+    
+    st.info(f"Total Configurations: {len(sweep_configs)} strategies × {len(symbols)} symbols = {len(sweep_configs) * len(symbols)} simulations")
+
+    # --- Common Settings ---
+    st.markdown("---")
+    col1, col2 = st.columns(2)
+    with col1:
+        timeframe = st.selectbox("Timeframe", ["1d", "4h", "1h"], key="sweep_timeframe")
+        initial_capital = st.number_input("Initial Capital", value=100000.0, key="sweep_capital")
+    with col2:
+        start_date = st.date_input("Start Date", value=pd.to_datetime("2023-01-01"), key="sweep_start")
+        end_date = st.date_input("End Date", value=pd.to_datetime("today"), key="sweep_end")
+
+    # --- Run Button ---
+    if st.button("🚀 Run Strategy Sweep", type="primary", use_container_width=True):
+        if not symbols or not sweep_configs:
+            st.error("Please select at least one symbol and one strategy configuration.")
+            return
+            
+        # Initialize progress
+        progress_bar = st.progress(0, text="Starting sweep...")
+        status_text = st.empty()
+        
+        payload = {
+            "symbols": symbols,
+            "strategies": sweep_configs,
+            "timeframe": timeframe,
+            "start_date": str(start_date),
+            "end_date": str(end_date),
+            "initial_capital": initial_capital
+        }
+        
+        try:
+            # 1) Start sweep (non-blocking - returns immediately)
+            start_resp = requests.post(f"{BACKEND_URL}/auto-sim/sweep", json=payload, timeout=10)
+            if start_resp.status_code != 200:
+                st.error(f"Failed to start sweep: {start_resp.status_code} - {start_resp.text}")
+                return
+            
+            status_text.info("Sweep started. Fetching progress...")
+            
+            # 2) Poll progress + result
+            while True:
+                # 2-1) Get progress
+                try:
+                    prog_resp = requests.get(f"{BACKEND_URL}/auto-sim/progress", timeout=5)
+                    if prog_resp.status_code == 200:
+                        prog = prog_resp.json()
+                        pct_float = float(prog.get("percent", 0.0))
+                        processed = prog.get("processed", 0)
+                        total = prog.get("total", 0)
+                        last_sym = prog.get("last_symbol", "")
+                        last_strat = prog.get("last_strategy", "")
+                        
+                        # Ensure pct is within 0-100
+                        pct_int = max(0, min(100, int(pct_float)))
+                        
+                        progress_bar.progress(pct_int, text=f"{pct_float:.1f}%")
+                        status_text.write(
+                            f"Processing {processed}/{total} configs ({pct_float:.1f}%) – {last_sym} · {last_strat}"
+                        )
+                except Exception:
+                    pass
+                
+                # 2-2) Check result status
+                try:
+                    result_resp = requests.get(f"{BACKEND_URL}/auto-sim/sweep-result", timeout=5)
+                    if result_resp.status_code == 200:
+                        result_payload = result_resp.json()
+                        sweep_status = result_payload.get("status", "idle")
+                        
+                        if sweep_status == "completed":
+                            results = result_payload.get("results", [])
+                            st.session_state["sweep_results"] = results
+                            progress_bar.progress(100, text="Sweep completed!")
+                            status_text.success(f"Sweep complete! Processed {len(results)} simulations.")
+                            break
+                        elif sweep_status == "error":
+                            err_msg = result_payload.get("error", "Unknown error")
+                            status_text.error(f"Sweep failed: {err_msg}")
+                            break
+                    else:
+                        status_text.error(f"Failed to fetch sweep result: {result_resp.status_code}")
+                        break
+                except Exception as e:
+                    # Just show a warning and continue
+                    status_text.warning(f"Error while fetching sweep result: {e}")
+                    time.sleep(1.0)
+                
+                time.sleep(0.5)
+                
+        except Exception as e:
+            st.error(f"Error while running sweep: {e}")
+
+    # --- Display Results ---
+    if "sweep_results" in st.session_state:
+        _render_sweep_results(st.session_state["sweep_results"])
+
+def _render_sweep_results(results: list):
+    """Render Strategy Sweep results."""
+    st.markdown("---")
+    st.subheader("🏆 Strategy Sweep Ranking")
+    
+    if not results:
+        st.warning("No results to display.")
+        return
+        
+    # Flatten results for DataFrame
+    rows = []
+    for r in results:
+        # Handle new flat format (StrategySweepResult)
+        if "strategy" in r:
+            strategy_name = r.get("strategy", "Unknown")
+            preset = r.get("preset", "")
+            strat_label = f"{strategy_name} | {preset}" if preset and preset != "default" else strategy_name
+            
+            # Max DD is decimal in backend, convert to %
+            max_dd = r.get("max_drawdown", 0.0)
+            if max_dd < 1.0 and max_dd > 0: # Heuristic check if it's decimal
+                max_dd *= 100.0
+            
+            rows.append({
+                "Symbol": r.get("symbol"),
+                "Strategy": strat_label,
+                "Return %": r.get("return_pct", 0),
+                "Total R": r.get("total_r", 0),
+                "Win Rate %": r.get("win_rate", 0),
+                "Trades": r.get("trades", 0),
+                "Max DD %": max_dd,
+                "Status": "✅" if not r.get("error") else "❌",
+                "Error": r.get("error")
+            })
+        else:
+            # Fallback for old nested format
+            strat_label = r.get("strategy_config", {}).get("label", "Unknown")
+            summary = r.get("result", {}).get("summary", {})
+            
+            # Max DD calculation from equity curve
+            max_dd = max((e.get("drawdown", 0) for e in r.get("result", {}).get("equity_curve", [])), default=0.0) * 100.0
+            
+            rows.append({
+                "Symbol": r.get("symbol"),
+                "Strategy": strat_label,
+                "Return %": r.get("result", {}).get("total_return_pct", 0),
+                "Total R": summary.get("total_r", 0),
+                "Win Rate %": summary.get("win_rate", 0),
+                "Trades": summary.get("total_trades", 0),
+                "Max DD %": max_dd,
+                "Status": "✅" if not r.get("error") else "❌",
+                "Error": r.get("error")
+            })
+        
+    df = pd.DataFrame(rows)
+    
+    # Sort by Total R desc
+    df = df.sort_values("Total R", ascending=False)
+    
+    # Display Table
+    st.dataframe(
+        df,
+        use_container_width=True,
+        column_config={
+            "Return %": st.column_config.NumberColumn(format="%.2f%%"),
+            "Total R": st.column_config.NumberColumn(format="%.2fR"),
+            "Win Rate %": st.column_config.NumberColumn(format="%.1f%%"),
+            "Max DD %": st.column_config.NumberColumn(format="%.2f%%"),
+        }
+    )
+    
+    # CSV Export
+    csv = df.to_csv(index=False).encode('utf-8')
+    st.download_button(
+        "📥 Download Results CSV",
+        csv,
+        "strategy_sweep_results.csv",
+        "text/csv",
+        key='download-csv'
+    )
 
 
 def _render_auto_sim_results(result: dict, key_suffix: str):

@@ -105,6 +105,22 @@ class BacktestStats(BaseModel):
     sharpe_ratio: Optional[float] = Field(default=None, description="Sharpe ratio")
 
 
+class SignalExplain(BaseModel):
+    """Signal explanation details."""
+    indicators: Dict[str, Any] = Field(default_factory=dict)
+    conditions_triggered: List[str] = Field(default_factory=list)
+    confidence: float = Field(default=0.5)
+
+
+class SignalWithExplain(BaseModel):
+    """A signal with explanation for explainability layer."""
+    index: int = Field(..., description="Index in the dataframe")
+    date: str = Field(..., description="Signal date in ISO8601 format")
+    type: str = Field(..., description="Signal type: BUY, SELL, HOLD")
+    price: float = Field(..., description="Price at signal")
+    explain: SignalExplain = Field(default_factory=SignalExplain)
+
+
 class BacktestResponse(BaseModel):
     """
     /simulate バックテスト API のレスポンスモデル。
@@ -134,6 +150,10 @@ class BacktestResponse(BaseModel):
         default_factory=list,
         description="Daily price series with optional indicators for visualization",
     )
+    signals: List[SignalWithExplain] = Field(
+        default_factory=list,
+        description="List of signals with explanations for explainability layer",
+    )
 
 
 __all__ = [
@@ -142,4 +162,6 @@ __all__ = [
     "BacktestStats",
     "EquityCurvePoint",
     "TradeSummary",
+    "SignalExplain",
+    "SignalWithExplain",
 ]

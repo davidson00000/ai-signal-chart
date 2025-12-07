@@ -35,6 +35,23 @@ from backend import data_feed
 from backend.live.signal_generator import generate_live_signal
 from backend.models.decision_log import DecisionEvent, DecisionLog
 from backend.r_analytics import compute_r_analytics
+import threading
+
+
+# Global progress state for Strategy Sweep
+SWEEP_PROGRESS: Dict[str, Any] = {
+    "total": 0,
+    "processed": 0,
+    "last_symbol": "",
+    "last_strategy": "",
+    "status": "idle",
+    "percent": 0.0,
+    "error": None,
+}
+
+# Global results and thread for async Strategy Sweep
+SWEEP_RESULTS: Optional[List[Any]] = None
+SWEEP_THREAD: Optional[threading.Thread] = None
 
 
 # =============================================================================
@@ -160,6 +177,57 @@ class AutoSimResult(BaseModel):
     r_analytics: Optional[Dict[str, Any]] = None  # R-based analytics (when R management enabled)
 
 
+class StrategyConfig(BaseModel):
+    strategy_mode: str
+    label: Optional[str] = None  # Display label for the strategy
+    preset_name: Optional[str] = None  # Optional preset name
+    params: Optional[Dict[str, Any]] = None  # Optional params dict
+    
+    # Individual strategy parameters (sent directly from frontend)
+    ma_short_window: Optional[int] = None
+    ma_long_window: Optional[int] = None
+    rsi_period: Optional[int] = None
+    rsi_oversold: Optional[int] = None
+    rsi_overbought: Optional[int] = None
+    ema_short: Optional[int] = None
+    ema_long: Optional[int] = None
+    macd_fast: Optional[int] = None
+    macd_slow: Optional[int] = None
+    macd_signal: Optional[int] = None
+    breakout_window: Optional[int] = None
+    exit_window: Optional[int] = None
+    bb_period: Optional[int] = None
+    bb_std: Optional[float] = None
+
+
+class StrategySweepRequest(BaseModel):
+    symbols: List[str]
+    timeframe: str = "1d"
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+    initial_capital: float = 100000.0
+    
+    execution_mode: Literal["same_bar_close", "next_bar_open"] = "same_bar_close"
+    position_sizing_mode: str = "full_equity"
+    use_r_management: bool = True
+    virtual_stop_percent: float = 0.03
+    
+    strategies: List[StrategyConfig]
+
+
+class StrategySweepResult(BaseModel):
+    symbol: str
+    strategy: str
+    preset: str
+    return_pct: float
+    total_r: float
+    avg_r: float
+    win_rate: float
+    max_drawdown: float
+    trades: int
+    error: Optional[str] = None
+
+
 # =============================================================================
 # MA Crossover Signal Generation
 # =============================================================================
@@ -196,6 +264,53 @@ def generate_ma_crossover_signals(
     return pd.Series(signals, index=df.index)
 
 
+
+def run_strategy_for_symbol(config: AutoSimConfig, df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Run strategy logic for the entire dataframe to generate signals.
+    Adds 'signal' column to df (1: Buy, -1: Sell, 0: Hold).
+    Also adds indicator columns depending on strategy.
+    """
+    mode = config.strategy_mode
+    config_dict = config.model_dump()
+    
+    # Initialize signal column if not present
+    if 'signal' not in df.columns:
+        df['signal'] = 0
+        
+    if mode == "ema_crossover":
+        from backend.strategies.ema_crossover import EmaCrossoverStrategy
+        return EmaCrossoverStrategy(config_dict).generate_signals(df)
+    elif mode == "macd":
+        from backend.strategies.macd_strategy import MacdStrategy
+        return MacdStrategy(config_dict).generate_signals(df)
+    elif mode == "breakout":
+        from backend.strategies.breakout_strategy import BreakoutStrategy
+        return BreakoutStrategy(config_dict).generate_signals(df)
+    elif mode == "bollinger":
+        from backend.strategies.bollinger_strategy import BollingerStrategy
+        return BollingerStrategy(config_dict).generate_signals(df)
+    elif mode == "rsi_mean_reversion":
+        from backend.strategies.rsi_mean_reversion import RSIMeanReversionStrategy
+        # Map config params to strategy params
+        strat_params = {
+            "period": config.rsi_period,
+            "oversold": config.rsi_oversold,
+            "overbought": config.rsi_overbought
+        }
+        return RSIMeanReversionStrategy(**strat_params).generate_signals(df)
+    elif mode == "ma_crossover":
+        if config.ma_short_window and config.ma_long_window:
+            signals = generate_ma_crossover_signals(df, config.ma_short_window, config.ma_long_window)
+            df['signal'] = signals
+            # Add MA columns for visualization/info
+            df['ma_short'] = df['close'].rolling(window=config.ma_short_window).mean()
+            df['ma_long'] = df['close'].rolling(window=config.ma_long_window).mean()
+        return df
+        
+    return df
+
+
 def generate_action_for_bar(
     config: AutoSimConfig,
     df: pd.DataFrame,
@@ -226,7 +341,57 @@ def generate_action_for_bar(
     """
     mode = config.strategy_mode
     
+    # 1. Use pre-calculated signals if available (Preferred for batch strategies)
+    if "signal" in df.columns and mode in ["ema_crossover", "macd", "breakout", "bollinger", "ma_crossover"]:
+        sig = df['signal'].iloc[idx]
+        action = "hold"
+        if sig == 1:
+            action = "buy"
+        elif sig == -1:
+            action = "sell"
+            
+        # Extract strategy info from columns
+        info = {"strategy": mode, "signal": int(sig)}
+        row = df.iloc[idx]
+        
+        if mode == "ema_crossover":
+            info.update({
+                "ema_short": row.get("ema_short"), 
+                "ema_long": row.get("ema_long"),
+                "reason": f"Signal: {sig}"
+            })
+        elif mode == "macd":
+            info.update({
+                "macd": row.get("macd_line"),
+                "signal_line": row.get("signal_line"),
+                "histogram": row.get("macd_hist"),
+                "reason": f"Signal: {sig}"
+            })
+        elif mode == "breakout":
+            info.update({
+                "highest_high": row.get("highest_high"),
+                "lowest_low": row.get("lowest_low"),
+                "reason": f"Signal: {sig}"
+            })
+        elif mode == "bollinger":
+            info.update({
+                "upper": row.get("upper"),
+                "mid": row.get("mid"),
+                "lower": row.get("lower"),
+                "reason": f"Signal: {sig}"
+            })
+        elif mode == "ma_crossover":
+            info.update({
+                "ma_short": row.get("ma_short"),
+                "ma_long": row.get("ma_long"),
+                "reason": f"Signal: {sig}"
+            })
+            
+        return action, info
+
+    # 2. Legacy / Dynamic modes
     if mode == "ma_crossover":
+        # Fallback if signal col missing
         return _generate_ma_crossover_action(config, df, idx)
     elif mode == "buy_and_hold":
         return _generate_buy_and_hold_action(config, df, idx)
@@ -235,23 +400,6 @@ def generate_action_for_bar(
     elif mode == "final_signal":
         return _generate_final_signal_action(config, df, idx)
     
-    # New Strategies
-    # Convert config to dict for strategy init
-    config_dict = config.model_dump()
-    
-    if mode == "ema_crossover":
-        from backend.strategies.ema_crossover import EmaCrossoverStrategy
-        return EmaCrossoverStrategy(config_dict).generate_action(df, idx)
-    elif mode == "macd":
-        from backend.strategies.macd_strategy import MacdStrategy
-        return MacdStrategy(config_dict).generate_action(df, idx)
-    elif mode == "breakout":
-        from backend.strategies.breakout_strategy import BreakoutStrategy
-        return BreakoutStrategy(config_dict).generate_action(df, idx)
-    elif mode == "bollinger":
-        from backend.strategies.bollinger_strategy import BollingerStrategy
-        return BollingerStrategy(config_dict).generate_action(df, idx)
-        
     return "hold", {"reason": f"Unknown strategy mode: {mode}"}
 
 
@@ -778,10 +926,11 @@ def run_auto_simulation(config: AutoSimConfig) -> AutoSimResult:
             )
     
     # 1. Fetch Historical Data
+    limit = config.max_bars if config.max_bars and config.max_bars > 0 else 5000
     candles = data_feed.get_chart_data(
         symbol=config.symbol,
         timeframe=config.timeframe,
-        limit=500  # Get enough data
+        limit=limit
     )
     
     if not candles:
@@ -827,11 +976,33 @@ def run_auto_simulation(config: AutoSimConfig) -> AutoSimResult:
     
     df = df.reset_index(drop=True)
     
+    # Call core simulation logic
+    return run_simulation_core(config, df)
+
+
+def run_simulation_core(config: AutoSimConfig, df: pd.DataFrame) -> AutoSimResult:
+    """
+    Core simulation logic that takes a DataFrame and Config.
+    Does NOT fetch data.
+    """
+    # Pre-calculate signals for batch strategies
+    df = run_strategy_for_symbol(config, df)
+    
     # Determine warmup period
     if config.strategy_mode == "ma_crossover":
-        warmup = config.ma_long_window + 5  # MA needs long_window bars
+        warmup = (config.ma_long_window or 50) + 5
+    elif config.strategy_mode == "ema_crossover":
+        warmup = (config.ema_long or 26) + 5
+    elif config.strategy_mode == "macd":
+        warmup = (config.macd_slow or 26) + (config.macd_signal or 9) + 5
+    elif config.strategy_mode == "bollinger":
+        warmup = (config.bb_period or 20) + 5
+    elif config.strategy_mode == "breakout":
+        warmup = (config.breakout_window or 20) + 5
+    elif config.strategy_mode == "rsi_mean_reversion":
+        warmup = (config.rsi_period or 14) + 5
     else:
-        warmup = 50  # Final signal needs ~50 bars for indicators
+        warmup = 50
     
     if len(df) < warmup + 10:
         return AutoSimResult(
@@ -1216,7 +1387,7 @@ def run_auto_simulation(config: AutoSimConfig) -> AutoSimResult:
                     r_value=r_value,
                     stop_price=entry_stop_price if config.use_r_management else None,
                     risk_amount=entry_risk_amount if config.use_r_management else None,
-                    equity_before=equity_before,
+                    equity_before=equity,
                     equity_after=equity,
                     risk_per_trade=config.risk_per_trade,
                     daily_r_loss=daily_r_tracker.get(bar_date),
@@ -1371,3 +1542,200 @@ def run_auto_simulation(config: AutoSimConfig) -> AutoSimResult:
         summary=summary,
         r_analytics=r_analytics_dict
     )
+
+
+def run_strategy_sweep(request: StrategySweepRequest) -> List[StrategySweepResult]:
+    """
+    Run Strategy Sweep simulation.
+    """
+    global SWEEP_PROGRESS
+    
+    # Initialize progress
+    total_configs = len(request.symbols) * len(request.strategies)
+    SWEEP_PROGRESS["total"] = total_configs
+    SWEEP_PROGRESS["processed"] = 0
+    SWEEP_PROGRESS["status"] = "running"
+    SWEEP_PROGRESS["percent"] = 0.0
+    SWEEP_PROGRESS["last_symbol"] = ""
+    SWEEP_PROGRESS["last_strategy"] = ""
+    
+    results = []
+    processed_count = 0
+    
+    for symbol in request.symbols:
+        try:
+            # Fetch data once per symbol
+            candles = data_feed.get_chart_data(
+                symbol=symbol,
+                timeframe=request.timeframe,
+                limit=5000
+            )
+            
+            if not candles:
+                for strat in request.strategies:
+                    results.append(StrategySweepResult(
+                        symbol=symbol,
+                        strategy=strat.strategy_mode,
+                        preset=strat.label or strat.preset_name or "default",
+                        return_pct=0, total_r=0, avg_r=0, win_rate=0, max_drawdown=0, trades=0,
+                        error="No data"
+                    ))
+                    
+                    # Update progress
+                    processed_count += 1
+                    SWEEP_PROGRESS["processed"] = processed_count
+                    if total_configs > 0:
+                        SWEEP_PROGRESS["percent"] = (processed_count / total_configs) * 100.0
+                continue
+            
+            df = pd.DataFrame(candles)
+            
+            # Ensure numeric types
+            for col in ["open", "high", "low", "close", "volume"]:
+                if col in df.columns:
+                    df[col] = pd.to_numeric(df[col], errors='coerce')
+            
+            # Parse timestamp
+            if "time" in df.columns:
+                df["timestamp"] = pd.to_datetime(df["time"], unit="s", errors="coerce")
+            elif "timestamp" in df.columns:
+                df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
+            
+            df = df.dropna(subset=["close", "timestamp"])
+            df = df.sort_values("timestamp").reset_index(drop=True)
+            
+            # Apply date filters
+            if request.start_date:
+                start_dt = pd.to_datetime(request.start_date)
+                df = df[df["timestamp"] >= start_dt]
+            
+            if request.end_date:
+                end_dt = pd.to_datetime(request.end_date)
+                df = df[df["timestamp"] <= end_dt]
+            
+            if df.empty:
+                for strat in request.strategies:
+                    results.append(StrategySweepResult(
+                        symbol=symbol,
+                        strategy=strat.strategy_mode,
+                        preset=strat.label or strat.preset_name or "default",
+                        return_pct=0, total_r=0, avg_r=0, win_rate=0, max_drawdown=0, trades=0,
+                        error="No data in range"
+                    ))
+                    
+                    # Update progress
+                    processed_count += 1
+                    SWEEP_PROGRESS["processed"] = processed_count
+                    if total_configs > 0:
+                        SWEEP_PROGRESS["percent"] = (processed_count / total_configs) * 100.0
+                continue
+            
+            # Run each strategy
+            for strat in request.strategies:
+                # Update progress info
+                SWEEP_PROGRESS["last_symbol"] = symbol
+                label = strat.label or strat.preset_name or strat.strategy_mode
+                SWEEP_PROGRESS["last_strategy"] = f"{strat.strategy_mode} | {label}"
+                
+                try:
+                    # Construct AutoSimConfig
+                    config_params = {
+                        "symbol": symbol,
+                        "timeframe": request.timeframe,
+                        "initial_capital": request.initial_capital,
+                        "strategy_mode": strat.strategy_mode,
+                        "execution_mode": request.execution_mode,
+                        "position_sizing_mode": request.position_sizing_mode,
+                        "use_r_management": request.use_r_management,
+                        "virtual_stop_percent": request.virtual_stop_percent,
+                    }
+                    
+                    # Merge strategy specific params from individual fields or params dict
+                    if strat.params:
+                        config_params.update(strat.params)
+                    
+                    # Also check individual fields
+                    if strat.ma_short_window is not None:
+                        config_params["ma_short_window"] = strat.ma_short_window
+                    if strat.ma_long_window is not None:
+                        config_params["ma_long_window"] = strat.ma_long_window
+                    if strat.rsi_period is not None:
+                        config_params["rsi_period"] = strat.rsi_period
+                    if strat.rsi_oversold is not None:
+                        config_params["rsi_oversold"] = strat.rsi_oversold
+                    if strat.rsi_overbought is not None:
+                        config_params["rsi_overbought"] = strat.rsi_overbought
+                    if strat.ema_short is not None:
+                        config_params["ema_short"] = strat.ema_short
+                    if strat.ema_long is not None:
+                        config_params["ema_long"] = strat.ema_long
+                    if strat.macd_fast is not None:
+                        config_params["macd_fast"] = strat.macd_fast
+                    if strat.macd_slow is not None:
+                        config_params["macd_slow"] = strat.macd_slow
+                    if strat.macd_signal is not None:
+                        config_params["macd_signal"] = strat.macd_signal
+                    if strat.breakout_window is not None:
+                        config_params["breakout_window"] = strat.breakout_window
+                    if strat.exit_window is not None:
+                        config_params["exit_window"] = strat.exit_window
+                    if strat.bb_period is not None:
+                        config_params["bb_period"] = strat.bb_period
+                    if strat.bb_std is not None:
+                        config_params["bb_std"] = strat.bb_std
+                    
+                    # Create config object
+                    sim_config = AutoSimConfig(**config_params)
+                    
+                    # Run simulation core (pass copy of df to avoid side effects)
+                    sim_result = run_simulation_core(sim_config, df.copy())
+                    
+                    summary = sim_result.summary
+                    
+                    # Calculate Max DD
+                    max_dd = 0.0
+                    if sim_result.equity_curve:
+                        max_dd = max((e.get("drawdown", 0) for e in sim_result.equity_curve), default=0.0)
+                        
+                    results.append(StrategySweepResult(
+                        symbol=symbol,
+                        strategy=strat.strategy_mode,
+                        preset=strat.label or strat.preset_name or "default",
+                        return_pct=sim_result.total_return_pct,
+                        total_r=summary.get("total_r", 0),
+                        avg_r=summary.get("avg_r", 0),
+                        win_rate=summary.get("win_rate", 0),
+                        max_drawdown=max_dd,
+                        trades=summary.get("total_trades", 0),
+                        error=summary.get("error")
+                    ))
+                    
+                except Exception as e:
+                    results.append(StrategySweepResult(
+                        symbol=symbol,
+                        strategy=strat.strategy_mode,
+                        preset=strat.label or strat.preset_name or "default",
+                        return_pct=0, total_r=0, avg_r=0, win_rate=0, max_drawdown=0, trades=0,
+                        error=str(e)
+                    ))
+                
+                # Update processed count
+                processed_count += 1
+                SWEEP_PROGRESS["processed"] = processed_count
+                if total_configs > 0:
+                    SWEEP_PROGRESS["percent"] = (processed_count / total_configs) * 100.0
+                    
+        except Exception as e:
+             for strat in request.strategies:
+                results.append(StrategySweepResult(
+                    symbol=symbol,
+                    strategy=strat.strategy_mode,
+                    preset=strat.label or strat.preset_name or "default",
+                    return_pct=0, total_r=0, avg_r=0, win_rate=0, max_drawdown=0, trades=0,
+                    error=f"Symbol error: {str(e)}"
+                ))
+    
+    SWEEP_PROGRESS["status"] = "completed"
+    SWEEP_PROGRESS["percent"] = 100.0
+    
+    return results

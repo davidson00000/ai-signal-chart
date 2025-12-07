@@ -50,3 +50,30 @@ class MacdStrategy(BaseStrategy):
             "histogram": curr_macd - curr_signal,
             "reason": reason
         }
+
+    def generate_signals(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Generate signals for the entire DataFrame at once.
+        """
+        df = df.copy()
+        
+        # Calculate MACD
+        ema_fast = df['close'].ewm(span=self.fast, adjust=False).mean()
+        ema_slow = df['close'].ewm(span=self.slow, adjust=False).mean()
+        df['macd_line'] = ema_fast - ema_slow
+        df['signal_line'] = df['macd_line'].ewm(span=self.signal, adjust=False).mean()
+        df['macd_hist'] = df['macd_line'] - df['signal_line']
+        
+        # Generate Signals
+        df['signal'] = 0
+        
+        bullish = df['macd_line'] > df['signal_line']
+        bearish = df['macd_line'] < df['signal_line']
+        
+        crossover_bull = bullish & (~bullish.shift(1).fillna(False))
+        crossover_bear = bearish & (~bearish.shift(1).fillna(False))
+        
+        df.loc[crossover_bull, 'signal'] = 1
+        df.loc[crossover_bear, 'signal'] = -1
+        
+        return df

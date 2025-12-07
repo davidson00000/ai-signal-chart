@@ -30,6 +30,22 @@ import {
     YAxis,
 } from 'recharts';
 import CandlestickChart from './components/CandlestickChart';
+import SignalDetail from './components/SignalDetail';
+
+// Signal types for explainability layer
+interface SignalExplain {
+    indicators: Record<string, number | string>;
+    conditions_triggered: string[];
+    confidence: number;
+}
+
+interface Signal {
+    index: number;
+    date: string;
+    type: 'BUY' | 'SELL' | 'HOLD';
+    price: number;
+    explain: SignalExplain;
+}
 
 type TabKey = 'backtest' | 'experiments' | 'opt' | 'lab';
 
@@ -147,6 +163,9 @@ function App() {
     const [jsonLoading, setJsonLoading] = useState(false);
     const [jsonError, setJsonError] = useState<string | null>(null);
     const [jsonResult, setJsonResult] = useState<BacktestResponse | null>(null);
+
+    // Explainability Layer - selected signal for popup
+    const [selectedSignal, setSelectedSignal] = useState<Signal | null>(null);
 
     // Experimentsタブを開いたら一覧更新
     useEffect(() => {
@@ -1229,6 +1248,63 @@ function App() {
                                         </div>
                                     )}
                                 </div>
+
+                                {/* Signals with Explainability (if available) */}
+                                {(result as any).signals && (result as any).signals.length > 0 && (
+                                    <div className="bg-slate-900/80 rounded-2xl p-6 border border-slate-800 shadow-lg shadow-slate-900/40">
+                                        <h3 className="text-sm font-semibold mb-4 flex items-center gap-2">
+                                            🧠 Signal Explanations
+                                            <span className="text-xs text-slate-500 font-normal">
+                                                (Click a signal to view details)
+                                            </span>
+                                        </h3>
+                                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 max-h-80 overflow-y-auto">
+                                            {(result as any).signals.slice(0, 30).map((sig: Signal, idx: number) => (
+                                                <button
+                                                    key={idx}
+                                                    onClick={() => setSelectedSignal(sig)}
+                                                    className={`text-left p-3 rounded-lg border transition-all hover:scale-[1.02] ${sig.type === 'BUY'
+                                                        ? 'bg-emerald-900/30 border-emerald-500/40 hover:border-emerald-400'
+                                                        : 'bg-rose-900/30 border-rose-500/40 hover:border-rose-400'
+                                                        }`}
+                                                >
+                                                    <div className="flex items-center justify-between mb-1">
+                                                        <span className={`text-xs font-semibold px-2 py-0.5 rounded ${sig.type === 'BUY'
+                                                            ? 'bg-emerald-500/30 text-emerald-300'
+                                                            : 'bg-rose-500/30 text-rose-300'
+                                                            }`}>
+                                                            {sig.type}
+                                                        </span>
+                                                        <span className="text-xs text-slate-400">
+                                                            {new Date(sig.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                                                        </span>
+                                                    </div>
+                                                    <div className="text-sm font-semibold text-slate-200">
+                                                        ${sig.price.toFixed(2)}
+                                                    </div>
+                                                    <div className="flex items-center gap-1 mt-1">
+                                                        <div className="flex-1 h-1.5 bg-slate-700 rounded-full overflow-hidden">
+                                                            <div
+                                                                className={`h-full rounded-full ${sig.explain.confidence >= 0.7 ? 'bg-emerald-400' :
+                                                                    sig.explain.confidence >= 0.5 ? 'bg-yellow-400' : 'bg-rose-400'
+                                                                    }`}
+                                                                style={{ width: `${sig.explain.confidence * 100}%` }}
+                                                            />
+                                                        </div>
+                                                        <span className="text-[10px] text-slate-500">
+                                                            {(sig.explain.confidence * 100).toFixed(0)}%
+                                                        </span>
+                                                    </div>
+                                                </button>
+                                            ))}
+                                        </div>
+                                        {(result as any).signals.length > 30 && (
+                                            <p className="text-xs text-slate-500 mt-2 text-center">
+                                                Showing 30 of {(result as any).signals.length} signals
+                                            </p>
+                                        )}
+                                    </div>
+                                )}
                             </section>
                         )}
 
@@ -1602,6 +1678,12 @@ function App() {
                     </div>
                 </div>
             </div>
+
+            {/* Signal Detail Popup (Explainability Layer) */}
+            <SignalDetail
+                signal={selectedSignal}
+                onClose={() => setSelectedSignal(null)}
+            />
         </div>
     );
 }

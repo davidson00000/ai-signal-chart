@@ -54,3 +54,27 @@ class BreakoutStrategy(BaseStrategy):
             "lowest_low": lowest_low,
             "reason": reason
         }
+
+    def generate_signals(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Generate signals for the entire DataFrame at once.
+        """
+        df = df.copy()
+        
+        # Calculate Channels (shifted by 1 to exclude current bar)
+        df['highest_high'] = df['high'].rolling(window=self.breakout_window).max().shift(1)
+        df['lowest_low'] = df['low'].rolling(window=self.exit_window).min().shift(1)
+        
+        # Generate Signals
+        df['signal'] = 0
+        
+        # Buy when Close > Highest High
+        buy_cond = df['close'] > df['highest_high']
+        
+        # Sell when Close < Lowest Low
+        sell_cond = df['close'] < df['lowest_low']
+        
+        df.loc[buy_cond, 'signal'] = 1
+        df.loc[sell_cond, 'signal'] = -1
+        
+        return df
