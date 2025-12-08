@@ -1168,6 +1168,149 @@ async def get_live_signals_endpoint(
         raise HTTPException(status_code=500, detail=f"Live signals generation failed: {str(e)}")
 
 
+@app.get("/recommended-symbols")
+async def get_recommended_symbols(
+    universe: str = "sp500_top50",
+    limit: int = 20
+) -> Dict[str, Any]:
+    """
+    Get AI-recommended symbols based on technical screening
+    
+    This endpoint uses a multi-factor scoring system to rank symbols:
+    - Trend Score (35%): MA crossover, MACD, ADX proxy
+    - Volatility Score (20%): ATR appropriateness
+    - Momentum Score (20%): ROC, RSI trend
+    - Oversold Score (15%): RSI levels
+    - Volume Spike Score (10%): Volume vs average
+    
+    Args:
+        universe: Universe identifier (e.g., "sp500_top50", "mega_caps")
+        limit: Maximum number of symbols to return (default: 20)
+    
+    Returns:
+        JSON with universe info, timestamp, and ranked symbol list
+    """
+    try:
+        from backend.signals.screener import screen_symbols
+        from backend.config.symbol_universes import get_universe_symbols
+        from backend import data_feed
+        from datetime import datetime
+        import pandas as pd
+        
+        # Get symbols from universe
+        symbols = get_universe_symbols(universe)
+        
+        if not symbols:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Universe '{universe}' not found or empty"
+            )
+        
+        # Data fetcher function for screener
+        def fetch_data(symbol: str, timeframe: str) -> pd.DataFrame:
+            """Fetch OHLCV data for a symbol"""
+            try:
+                # Get 100 days of data for reliable indicators
+                candles = data_feed.get_chart_data(symbol, timeframe, limit=100)
+                
+                if not candles:
+                    return None
+                
+                df = pd.DataFrame(candles)
+                
+                # Convert time to datetime index
+                if "time" in df.columns:
+                    df["timestamp"] = pd.to_datetime(df["time"], unit="s")
+                    df.set_index("timestamp", inplace=True)
+                
+                return df
+                
+            except Exception as e:
+                print(f"Error fetching {symbol}: {str(e)}")
+                return None
+        
+        # Run screening
+        screened_results = screen_symbols(
+            symbols=symbols,
+            data_fetcher=fetch_data,
+            timeframe="1d",
+            limit=limit
+        )
+        
+        # Build response
+        response = {
+            "universe": universe,
+            "as_of": datetime.utcnow().isoformat() + "Z",
+            "total_screened": len(symbols),
+            "total_returned": len(screened_results),
+            "symbols": screened_results
+        }
+        
+        return response
+        
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Symbol screening failed: {str(e)}"
+        )
+
+
+# =============================================================================
+# Risk Management Endpoints
+# =============================================================================
+
+class RiskCalculationRequest(BaseModel):
+    entry_price: float
+    stop_price: float
+    account_size: float = 10000
+    risk_per_trade_pct: float = 1.0
+    min_position_size: int = 0
+
+
+@app.post("/risk/calculate")
+async def calculate_risk(request: RiskCalculationRequest) -> Dict[str, Any]:
+    """
+    Calculate position size and risk metrics
+    
+    This endpoint uses the Risk Management Engine to calculate:
+    - 1R (risk amount in dollars)
+    - Risk per share
+    - Recommended position size
+    
+    Example:
+        POST /risk/calculate
+        {
+            "entry_price": 100,
+            "stop_price": 95,
+            "account_size": 10000,
+            "risk_per_trade_pct": 1.0
+        }
+    """
+    try:
+        from backend.risk_management import RiskManager
+        
+        risk_manager = RiskManager()
+        
+        result = risk_manager.calculate_position_size(
+            entry_price=request.entry_price,
+            stop_price=request.stop_price,
+            account_size=request.account_size,
+            risk_per_trade_pct=request.risk_per_trade_pct,
+            min_position_size=request.min_position_size
+        )
+        
+        return result
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Risk calculation failed: {str(e)}")
+
+
 @app.get("/rule_predictor_v2")
 async def get_rule_predictor_v2(symbol: str) -> Dict[str, Any]:
     """

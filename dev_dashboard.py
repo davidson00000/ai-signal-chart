@@ -3389,7 +3389,412 @@ def fetch_chart_data(symbol: str, timeframe: str, limit: int) -> pd.DataFrame:
     return generate_mock_price_data(periods=limit)
 
 
+def render_risk_calculator_page():
+    """Render the Risk Calculator page"""
+    st.title("📊 Risk Calculator - Position Sizing & 1R Management")
+    st.caption("Calculate optimal position sizes based on risk management principles")
+    
+    st.markdown("---")
+    
+    # Explanation
+    with st.expander("📚 What is 1R and Position Sizing?", expanded=False):
+        st.markdown("""
+        ### Core Concepts
+        
+        **1R (One R)**: The amount of capital you risk on a single trade
+        - Example: With a $10,000 account and 1% risk = $100 (1R)
+        - Professional traders typically risk 0.5-2% per trade
+        
+        **Position Size**: Number of shares to buy based on your risk tolerance
+        - Formula: `Position Size = 1R ÷ Risk Per Share`
+        - Risk Per Share = Entry Price - Stop Loss Price
+        
+        **Stop Loss**: Price level where you exit to limit losses
+        - Can be set manually or calculated using ATR (Average True Range)
+        - ATR-based stops adapt to market volatility
+        
+        ### Why This Matters
+        - **Protects Capital**: Limits losses to acceptable levels
+        - **Consistent Risk**: Each trade risks the same amount
+        - **Scalable System**: Works for any account size
+        """)
+    
+    # Input Section
+    st.markdown("### 💰 Account Settings")
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        account_size = st.number_input(
+            "Account Size ($)",
+            min_value=100.0,
+            value=10000.0,
+            step=100.0,
+            help="Total trading capital"
+        )
+    
+    with col2:
+        risk_pct = st.slider(
+            "Risk Per Trade (%)",
+            min_value=0.1,
+            max_value=5.0,
+            value=1.0,
+            step=0.1,
+            help="Percentage of account to risk on this trade (1-2% recommended)"
+        )
+    
+    st.markdown("### 📈 Trade Parameters")
+    col3, col4 = st.columns(2)
+    
+    with col3:
+        entry_price = st.number_input(
+            "Entry Price ($)",
+            min_value=0.01,
+            value=100.0,
+            step=0.01,
+            help="Price at which you plan to enter the trade"
+        )
+    
+    with col4:
+        stop_price = st.number_input(
+            "Stop Loss Price ($)",
+            min_value=0.01,
+            value=95.0,
+            step=0.01,
+            help="Price at which you'll exit to limit losses"
+        )
+    
+    # Calculate button
+    st.markdown("---")
+    col_btn1, col_btn2, col_btn3 = st.columns([1, 1, 1])
+    
+    with col_btn2:
+        calculate_btn = st.button("🧮 Calculate Position Size", type="primary", use_container_width=True)
+    
+    # Results
+    if calculate_btn or st.session_state.get("risk_calc_results"):
+        if calculate_btn:
+            # Call backend API
+            try:
+                response = requests.post(
+                    f"{BACKEND_URL}/risk/calculate",
+                    json={
+                        "entry_price": entry_price,
+                        "stop_price": stop_price,
+                        "account_size": account_size,
+                        "risk_per_trade_pct": risk_pct
+                    },
+                    timeout=10
+                )
+                
+                if response.status_code == 200:
+                    results = response.json()
+                    st.session_state["risk_calc_results"] = results
+                else:
+                    st.error(f"❌ API Error: {response.status_code}")
+                    return
+                    
+            except requests.exceptions.ConnectionError:
+                st.error(f"🔌 Cannot connect to backend at {BACKEND_URL}")
+                return
+            except Exception as e:
+                st.error(f"❌ Error: {str(e)}")
+                return
+        
+        # Display results
+        results = st.session_state.get("risk_calc_results")
+        
+        if results:
+            st.markdown("---")
+            st.markdown("### ✅ Calculation Results")
+            
+            # Warnings first
+            if results.get("warnings"):
+                for warning in results["warnings"]:
+                    st.warning(f"⚠️ {warning}")
+            
+            # Main results in metrics
+            col_r1, col_r2, col_r3 = st.columns(3)
+            
+            with col_r1:
+                st.metric(
+                    label="1R (Risk Amount)",
+                    value=f"${results['risk_amount']:.2f}",
+                    help=f"{risk_pct}% of ${account_size:,.0f}"
+                )
+            
+            with col_r2:
+                st.metric(
+                    label="Risk Per Share",
+                    value=f"${results['risk_per_share']:.2f}",
+                    help=f"Entry ${entry_price} - Stop ${stop_price}"
+                )
+            
+            with col_r3:
+                # Color code based on position size
+                position_size = results['position_size']
+                if position_size > 0:
+                    delta_label = "✓ Valid"
+                    delta_color = "normal"
+                else:
+                    delta_label = "✗ Invalid"
+                    delta_color = "off"
+                
+                st.metric(
+                    label="Position Size",
+                    value=f"{position_size} shares",
+                    delta=delta_label,
+                    delta_color=delta_color,
+                    help="Recommended number of shares to buy"
+                )
+            
+            # Detailed breakdown
+            with st.expander("📋 Detailed Breakdown", expanded=True):
+                st.markdown(f"""
+                **Account Parameters**:
+                - Account Size: ${account_size:,.2f}
+                - Risk Percentage: {risk_pct}%
+                - **1R (Risk Amount)**: ${results['risk_amount']:.2f}
+                
+                **Trade Parameters**:
+                - Entry Price: ${entry_price:.2f}
+                - Stop Loss: ${stop_price:.2f}
+                - **Risk Per Share**: ${results['risk_per_share']:.2f}
+                
+                **Position Sizing**:
+                - **Recommended Shares**: {position_size}
+                - Total Position Value: ${position_size * entry_price:,.2f}
+                - Max Loss if Stopped Out: ${position_size * results['risk_per_share']:.2f}
+                
+                **Portfolio Impact**:
+                - Position as % of Account: {(position_size * entry_price / account_size * 100):.2f}%
+                - Risk as % of Account: {(results['risk_amount'] / account_size * 100):.2f}%
+                """)
+            
+            # Risk/Reward visualization
+            if position_size > 0:
+                st.markdown("### 📊 Visual Breakdown")
+                
+                # Create simple bar chart
+                import plotly.graph_objects as go
+                
+                fig = go.Figure()
+                
+                # Create bar chart: Account Size vs 1R Loss
+                fig.add_trace(go.Bar(
+                    x=['Account Size', '1R Loss'],
+                    y=[account_size, results['risk_amount']],
+                    marker_color=['green', 'red'],
+                    text=[f"${account_size:,.0f}", f"${results['risk_amount']:.2f}"],
+                    textposition='auto',
+                    hovertemplate='<b>%{x}</b><br>$%{y:,.2f}<extra></extra>'
+                ))
+                
+                fig.update_layout(
+                    title="Account Size vs 1R Risk",
+                    yaxis_title="Amount ($)",
+                    xaxis_title="",
+                    showlegend=False,
+                    height=400,
+                    yaxis=dict(gridcolor='lightgray')
+                )
+                
+                st.plotly_chart(fig, use_container_width=True)
+                
+                # Additional risk metrics
+                st.caption(f"**Risk as % of Account**: {(results['risk_amount'] / account_size * 100):.2f}%")
+
+
+
+def render_ai_screener_page():
+    """Render the AI Screener page"""
+    st.title("🧠 AI Screener - Symbol Selection")
+    st.caption("AI-powered stock screening based on multi-factor technical analysis")
+    
+    st.markdown("---")
+    
+    # Controls
+    col1, col2, col3 = st.columns([2, 1, 1])
+    
+    with col1:
+        universe_options = {
+            "mega_caps": "MegaCaps (MAG7)",
+            "sp500_top50": "S&P 500 Top 50",
+            "sp500_all": "S&P 500 All (~500 symbols)",
+            "us_semiconductors": "US Semiconductors",
+            "kousuke_watchlist_v1": "Kousuke Watchlist v1"
+        }
+        selected_universe = st.selectbox(
+            "Universe",
+            options=list(universe_options.keys()),
+            format_func=lambda x: universe_options[x],
+            help="Select which universe of symbols to screen"
+        )
+    
+    with col2:
+        limit = st.number_input(
+            "Top N Results",
+            min_value=5,
+            max_value=50,
+            value=20,
+            step=5,
+            help="Number of top-ranked symbols to return"
+        )
+    
+    with col3:
+        st.write("")  # Spacing
+        st.write("")  # Spacing
+        run_button = st.button("🚀 Run Screener", type="primary", use_container_width=True)
+    
+    st.markdown("---")
+    
+    # Scoring Factors Explanation
+    with st.expander("📊 How the AI Screener Works", expanded=False):
+        st.markdown("""
+        The screener uses a **multi-factor scoring system** to rank symbols (0-100 scale):
+        
+        | Factor | Weight | Description |
+        |--------|--------|-------------|
+        | **Trend Score** | 35% | MA crossover, MACD, ADX proxy - measures trend strength |
+        | **Volatility Score** | 20% | ATR appropriateness - optimal volatility range |
+        | **Momentum Score** | 20% | ROC, RSI trend - recent price momentum |
+        | **Oversold Score** | 15% | RSI levels - identifies potential buy opportunities |
+        | **Volume Spike Score** | 10% | Volume vs average - measures attention/liquidity |
+        
+        **Overall Score** = Weighted sum of all factors, normalized to 0-100.
+        
+        Higher scores indicate better trading candidates based on current technical conditions.
+        """)
+    
+    # Run screening
+    if run_button or st.session_state.get("screener_results") is not None:
+        with st.spinner(f"Screening {selected_universe}..."):
+            try:
+                # Determine timeout based on universe size
+                # Small universes (< 50): 60s
+                # Medium universes (50-100): 120s
+                # Large universes (sp500_all ~500): 300s (5 minutes)
+                timeout_settings = {
+                    "mega_caps": 60,
+                    "us_semiconductors": 60,
+                    "kousuke_watchlist_v1": 60,
+                    "sp500_top50": 120,
+                    "sp500_all": 300  # 5 minutes for ~500 symbols
+                }
+                request_timeout = timeout_settings.get(selected_universe, 120)
+                
+                # Show appropriate warning for large universes
+                if selected_universe == "sp500_all":
+                    st.info("⏳ **Large Universe Selected**: S&P 500 All (~500 symbols) takes approximately 3-5 minutes to process. Please be patient...")
+                
+                # Call backend API
+                response = requests.get(
+                    f"{BACKEND_URL}/recommended-symbols",
+                    params={
+                        "universe": selected_universe,
+                        "limit": limit
+                    },
+                    timeout=request_timeout
+                )
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    st.session_state["screener_results"] = data
+                    
+                    # Display results
+                    st.success(f"✅ Screened {data.get('total_screened', 0)} symbols, returning top {data.get('total_returned', 0)}")
+                    st.caption(f"As of: {data.get('as_of', 'N/A')}")
+                    
+                    if data.get("symbols"):
+                        # Convert to DataFrame for display
+                        symbols_data = data["symbols"]
+                        
+                        df_results = pd.DataFrame([
+                            {
+                                "Rank": idx + 1,
+                                "Symbol": s["symbol"],
+                                "Overall Score": s["score"],
+                                "Trend": s["factors"]["trend_score"],
+                                "Volatility": s["factors"]["volatility_score"],
+                                "Momentum": s["factors"]["momentum_score"],
+                                "Oversold": s["factors"]["oversold_score"],
+                                "Volume": s["factors"]["volume_spike_score"]
+                            }
+                            for idx, s in enumerate(symbols_data)
+                        ])
+                        
+                        # Style the dataframe
+                        st.dataframe(
+                            df_results.style.background_gradient(
+                                subset=["Overall Score", "Trend", "Volatility", "Momentum", "Oversold", "Volume"],
+                                cmap="RdYlGn",
+                                vmin=0,
+                                vmax=100
+                            ).format({
+                                "Overall Score": "{:.1f}",
+                                "Trend": "{:.1f}",
+                                "Volatility": "{:.1f}",
+                                "Momentum": "{:.1f}",
+                                "Oversold": "{:.1f}",
+                                "Volume": "{:.1f}"
+                            }),
+                            use_container_width=True,
+                            height=600
+                        )
+                        
+                        # Top 3 Highlights
+                        st.markdown("### 🏆 Top 3 Recommended Symbols")
+                        cols = st.columns(3)
+                        
+                        for idx, s in enumerate(symbols_data[:3]):
+                            with cols[idx]:
+                                st.metric(
+                                    label=f"#{idx+1} {s['symbol']}",
+                                    value=f"{s['score']:.1f}",
+                                    delta=f"Top {idx+1}",
+                                    delta_color="off"
+                                )
+                                
+                                # Mini factor breakdown
+                                st.caption("Factor Breakdown:")
+                                factors = s['factors']
+                                st.progress(factors['trend_score'] / 100, text=f"Trend: {factors['trend_score']:.0f}")
+                                st.progress(factors['momentum_score'] / 100, text=f"Momentum: {factors['momentum_score']:.0f}")
+                                st.progress(factors['volatility_score'] / 100, text=f"Volatility: {factors['volatility_score']:.0f}")
+                    else:
+                        st.warning("No symbols passed the screening criteria.")
+                        
+                elif response.status_code == 404:
+                    st.error(f"❌ Universe '{selected_universe}' not found")
+                else:
+                    st.error(f"❌ Error: {response.status_code} - {response.text}")
+                    
+            except requests.exceptions.Timeout:
+                if selected_universe == "sp500_all":
+                    st.error("""
+                    ⏱️ **Request Timed Out for S&P 500 All**
+                    
+                    The S&P 500 All universe (~500 symbols) requires significant processing time.
+                    
+                    **Solutions**:
+                    1. Try a smaller universe (e.g., S&P 500 Top 50)
+                    2. Reduce the limit to top 10-20 symbols
+                    3. Wait for backend optimization (caching/parallel processing)
+                    
+                    **Note**: This is a known limitation. Future updates will add caching to make this < 1 second.
+                    """)
+                else:
+                    st.error(f"⏱️ Request timed out for universe '{selected_universe}'. Try a smaller universe or reduce the limit.")
+            except requests.exceptions.ConnectionError:
+                st.error(f"🔌 Cannot connect to backend at {BACKEND_URL}. Make sure FastAPI is running.")
+            except Exception as e:
+                st.error(f"❌ Unexpected error: {str(e)}")
+                import traceback
+                with st.expander("Error Details"):
+                    st.code(traceback.format_exc())
+
+
 def main():
+
     """Main application with mode switch"""
     # Page Config
     st.set_page_config(
@@ -3414,7 +3819,7 @@ def main():
     # We bind directly to "mode" key so st.session_state["mode"] is automatically updated
     
     # Ensure mode is in options, otherwise default to Dashboard
-    options = ["Developer Dashboard", "Backtest Lab", "Strategy Lab", "Live Signal", "Predictor Backtest Lab", "Market Scanner", "Auto Sim Lab"]
+    options = ["Developer Dashboard", "Backtest Lab", "Strategy Lab", "Live Signal", "Predictor Backtest Lab", "Market Scanner", "Auto Sim Lab", "AI Screener", "Risk Calculator"]
     if st.session_state.get("mode") not in options:
         st.session_state["mode"] = "Developer Dashboard"
 
@@ -3431,7 +3836,9 @@ def main():
         "Live Signal": "live_signal",
         "Predictor Backtest Lab": "predictor",
         "Market Scanner": "scanner",
-        "Auto Sim Lab": "auto_sim"
+        "Auto Sim Lab": "auto_sim",
+        "AI Screener": "ai_screener",
+        "Risk Calculator": "risk_calculator"
     }
     
     # Update URL params whenever mode changes
@@ -3557,7 +3964,11 @@ def main():
     elif mode == "Auto Sim Lab":
         render_auto_sim_lab()
 
+    elif mode == "AI Screener":
+        render_ai_screener_page()
 
+    elif mode == "Risk Calculator":
+        render_risk_calculator_page()
 
 
 # =============================================================================
